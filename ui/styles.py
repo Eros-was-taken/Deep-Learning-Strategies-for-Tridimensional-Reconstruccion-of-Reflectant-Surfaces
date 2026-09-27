@@ -107,4 +107,65 @@ STYLE = """
         background-color: #2B6CB0;
         border: 1px solid #2B6CB0;
     }
+
+    QLineEdit {
+        background-color: #FFFFFF;
+        border: 1px solid #DEE2E6;
+        border-radius: 5px;
+        padding: 5px 10px;
+        font-size: 13px;
+        color: #1A202C;
+    }
+
+    QLineEdit:focus {
+        border: 1px solid #2B6CB0;
+    }
+
+    QLineEdit:disabled {
+        background-color: #F8F9FA;
+        color: #718096;
+    }
+
+    QGroupBox {
+        font-size: 11px;
+        font-weight: bold;
+        color: #718096;
+        border: 1px solid #DEE2E6;
+        border-radius: 6px;
+        margin-top: 8px;
+        padding-top: 8px;
+    }
+
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        subcontrol-position: top left;
+        padding: 0 4px;
+        color: #718096;
+    }
+
+    QScrollArea {
+        border: none;
+        background-color: transparent;
+    }
+
+    QScrollBar:vertical {
+        background-color: #F8F9FA;
+        width: 8px;
+        border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical {
+        background-color: #DEE2E6;
+        border-radius: 4px;
+        min-height: 20px;
+    }
+
+    QScrollBar::handle:vertical:hover {
+        background-color: #2B6CB0;
+    }
+
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
 """

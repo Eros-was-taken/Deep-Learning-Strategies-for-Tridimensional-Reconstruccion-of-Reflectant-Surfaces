@@ -1,13 +1,18 @@
 import sys
+import numpy as np
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox,QSlider, QCheckBox
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
+    QLineEdit, QGroupBox, QScrollArea
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QDoubleValidator
 import pyvista as pv
 from pyvistaqt import QtInteractor
-import numpy as np
 from core.mesh_loader import load_mesh, extract_point_cloud
-from core.camera import build_intrinsic_matrix, build_extrinsic_matrix, project_points
+from core.camera import (
+    build_intrinsic_matrix, build_camera_extrinsic, build_projector_extrinsic, project_points, get_camera_center, compute_fov
+)
+from core.geometry import condition_mesh
 from ui.styles import STYLE
 
 class MainWindow(QMainWindow):
@@ -22,10 +27,24 @@ class MainWindow(QMainWindow):
         self.mesh = None
         self.mesh_info = None
         self.modo_visualizacion = 'malla'
-        self.focal_length = 800
-        self.resolucion = (640, 480)
-        self.traduccion = [0, 0, 3]
-        self.rotacion = [0, 0, 0]
+
+        # Parametros fisicos camara
+        self.cam_focal_mm = 12.0
+        self.cam_pixel_um = 4.65
+        self.cam_width = 1024
+        self.cam_height = 768
+        self.cam_distance_mm = 1000.0
+
+        # Parametros fisicos projector
+        self.proj_focal_mm = 12.0
+        self.proj_pixel_um = 4.50
+        self.proj_width = 1024
+        self.proj_height = 768
+        self.proj_distance_mm = 1000.0
+        self.proj_angle_deg = 12.0
+
+        self.obj_alpha_deg = 0.0
+        self.obj_beta_deg = 0.0
         
         self._build_ui()
 
@@ -37,14 +56,18 @@ class MainWindow(QMainWindow):
         layout_principal.setSpacing(10)
         layout_principal.setContentsMargins(10, 10, 10, 10)
 
-        # Panel izquierdo
-        panel_izquierdo = QFrame()
-        panel_izquierdo.setFrameShape(QFrame.Shape.StyledPanel)
-        panel_izquierdo.setFixedWidth(260)
-        layout_izquierdo = QVBoxLayout(panel_izquierdo)
+        # Panel izquierdo con Scroll
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFixedWidth(280)
+
+        panel_scroll = QWidget()
+        layout_izquierdo = QVBoxLayout(panel_scroll)
         layout_izquierdo.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout_izquierdo.setSpacing(12)
-        layout_izquierdo.setContentsMargins(16, 16, 16, 16)
+        layout_izquierdo.setContentsMargins(12, 12, 12, 12)
+
+        scroll_area.setWidget(panel_scroll)
 
         # Titulo del panel
         titulo_panel = QLabel('MODELO 3D')
@@ -103,6 +126,40 @@ class MainWindow(QMainWindow):
         sep3.setFrameShape(QFrame.Shape.HLine)
         sep3.setFixedHeight(1)
 
+        # Grupo camara
+        grupo_camara = QGroupBox('Cámara')
+        layout_camara = QVBoxLayout(grupo_camara)
+        layout_camara.setSpacing(6)
+
+        self.campo_cam_focal = self._crear_campo(layout_camara, 'Longitud focal (mm):', '12.0')
+        self.campo_cam_pixel = self._crear_campo(layout_camara, 'Paso de píxel (µm):', '4.65')
+        self.campo_cam_width, self.campo_cam_height = self._crear_campo_resolucion(layout_camara, 'Resolución:', '1024', '768')
+        self.campo_cam_distance = self._crear_campo(layout_camara, 'Distancia (mm):', '1000.0')
+        
+        self.campo_obj_alpha = self._crear_campo(layout_camara, 'Rotación objeto X (°)', '0.0')
+        self.campo_obj_beta = self._crear_campo(layout_camara, 'Rotación objeto Y (°)', '0.0')
+
+        # Grupo proyector
+        grupo_proyector = QGroupBox('Proyector')
+        layout_proyector = QVBoxLayout(grupo_proyector)
+        layout_proyector.setSpacing(6)
+
+        self.campo_proj_focal = self._crear_campo(layout_proyector, 'Longitud focal (mm):', '12.0')
+        self.campo_proj_pixel = self._crear_campo(layout_proyector, 'Paso de píxel (µm):', '4.50')
+        self.campo_proj_width, self.campo_proj_height = self._crear_campo_resolucion(layout_proyector, 'Resolución:', '1024', '768')
+        self.campo_proj_distance = self._crear_campo(layout_proyector, 'Distancia (mm):', '1000.0')
+        self.campo_proj_angle = self._crear_campo(layout_proyector, 'Ángulo (°):', '12.0')
+
+        # Boton para aplicar configuracion
+        self.btn_aplicar = QPushButton('Aplicar configuración')
+        self.btn_aplicar.setFixedHeight(40)
+        self.btn_aplicar.clicked.connect(self._aplicar_configuracion)
+
+        # Separador
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.Shape.HLine)
+        sep4.setFixedHeight(1)
+
         # Etiquetas de informacion
         titulo_info = QLabel('INFORMACION')
         titulo_info.setObjectName('label_titulo')
@@ -128,63 +185,6 @@ class MainWindow(QMainWindow):
         self.label_dim.setObjectName('label_valor')
         self.label_dim.setWordWrap(True)
 
-        # Separador camara
-        sep4 = QFrame()
-        sep4.setFrameShape(QFrame.Shape.HLine)
-        sep4.setFixedHeight(1)
-
-        # Seccion camara
-        titulo_camara = QLabel('CAMARA PINHOLE')
-        titulo_camara.setObjectName('label_titulo')
-
-        # Distancia focal
-        self.label_focal = QLabel('Distancia focal: 800px')
-        self.label_focal.setObjectName('label_valor')
-        self.slider_focal = QSlider(Qt.Orientation.Horizontal)
-        self.slider_focal.setMinimum(100)
-        self.slider_focal.setMaximum(2000)
-        self.slider_focal.setValue(800)
-        self.slider_focal.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_focal.setTickInterval(500)
-        self.slider_focal.valueChanged.connect(self._actualizar_label_focal)
-        self.slider_focal.valueChanged.connect(self._actualizar_visualizacion)
-
-        # Traslacion Z
-        self.label_tz = QLabel('Distancia al objeto: 3')
-        self.label_tz.setObjectName('label_valor')
-        self.slider_tz = QSlider(Qt.Orientation.Horizontal)
-        self.slider_tz.setMinimum(1)
-        self.slider_tz.setMaximum(10)
-        self.slider_tz.setValue(3)
-        self.slider_tz.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_tz.setTickInterval(3)
-        self.slider_tz.valueChanged.connect(self._actualizar_label_tz)
-        self.slider_tz.valueChanged.connect(self._actualizar_visualizacion)
-
-        # Rotacion X
-        self.label_rx = QLabel('Rotacion X: 0°')
-        self.label_rx.setObjectName('label_valor')
-        self.slider_rx = QSlider(Qt.Orientation.Horizontal)
-        self.slider_rx.setMinimum(-180)
-        self.slider_rx.setMaximum(180)
-        self.slider_rx.setValue(0)
-        self.slider_rx.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_rx.setTickInterval(90)
-        self.slider_rx.valueChanged.connect(self._actualizar_label_rx)
-        self.slider_rx.valueChanged.connect(self._actualizar_visualizacion)
-
-        # Rotacion Y
-        self.label_ry = QLabel('Rotacion Y: 0°')
-        self.label_ry.setObjectName('label_valor')
-        self.slider_ry = QSlider(Qt.Orientation.Horizontal)
-        self.slider_ry.setMinimum(-180)
-        self.slider_ry.setMaximum(180)
-        self.slider_ry.setValue(0)
-        self.slider_ry.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.slider_ry.setTickInterval(90)
-        self.slider_ry.valueChanged.connect(self._actualizar_label_ry)
-        self.slider_ry.valueChanged.connect(self._actualizar_visualizacion)
-
         # Agregar elementos al panel izquierdo
         layout_izquierdo.addWidget(titulo_panel)
         layout_izquierdo.addWidget(self.btn_cargar)
@@ -199,6 +199,10 @@ class MainWindow(QMainWindow):
         layout_izquierdo.addWidget(self.combo_posicion)
         layout_izquierdo.addWidget(self.check_suavizado)
         layout_izquierdo.addWidget(sep3)
+        layout_izquierdo.addWidget(grupo_camara)
+        layout_izquierdo.addWidget(grupo_proyector)
+        layout_izquierdo.addWidget(self.btn_aplicar)
+        layout_izquierdo.addWidget(sep4)
         layout_izquierdo.addWidget(titulo_info)
         layout_izquierdo.addWidget(self.label_nombre_titulo)
         layout_izquierdo.addWidget(self.label_nombre)
@@ -208,22 +212,65 @@ class MainWindow(QMainWindow):
         layout_izquierdo.addWidget(self.label_caras)
         layout_izquierdo.addWidget(self.label_dim_titulo)
         layout_izquierdo.addWidget(self.label_dim)
-        layout_izquierdo.addWidget(sep4)
-        layout_izquierdo.addWidget(titulo_camara)
-        layout_izquierdo.addWidget(self.label_focal)
-        layout_izquierdo.addWidget(self.slider_focal)
-        layout_izquierdo.addWidget(self.label_tz)
-        layout_izquierdo.addWidget(self.slider_tz)
-        layout_izquierdo.addWidget(self.label_rx)
-        layout_izquierdo.addWidget(self.slider_rx)
-        layout_izquierdo.addWidget(self.label_ry)
-        layout_izquierdo.addWidget(self.slider_ry)
 
         # Panel derecho - Visualizacion 3D
         self.plotter = QtInteractor(self)
 
-        layout_principal.addWidget(panel_izquierdo)
+        layout_principal.addWidget(scroll_area)
         layout_principal.addWidget(self.plotter)
+
+    def _crear_campo(self, layout, etiqueta, valor_default):
+        label = QLabel(etiqueta)
+        label.setObjectName('label_valor')
+        campo = QLineEdit(valor_default)
+        campo.setValidator(QDoubleValidator())
+        layout.addWidget(label)
+        layout.addWidget(campo)
+        return campo
+
+    def _crear_campo_resolucion(self, layout, etiqueta, valor_w, valor_h):
+        label = QLabel(etiqueta)
+        label.setObjectName('label_valor')
+        layout.addWidget(label)
+        fila = QWidget()
+        fila_layout = QHBoxLayout(fila)
+        fila_layout.setContentsMargins(0, 0, 0, 0)
+        fila_layout.setSpacing(6)
+        campo_w = QLineEdit(valor_w)
+        campo_w.setValidator(QDoubleValidator())
+        label_x = QLabel('x')
+        label_x.setObjectName('label_valor')
+        campo_h = QLineEdit(valor_h)
+        campo_h.setValidator(QDoubleValidator())
+        fila_layout.addWidget(campo_w)
+        fila_layout.addWidget(label_x)
+        fila_layout.addWidget(campo_h)
+        layout.addWidget(fila)
+        return campo_w, campo_h
+    
+    def _aplicar_configuracion(self):
+        try:
+            self.cam_focal_mm = float(self.campo_cam_focal.text())
+            self.cam_pixel_um = float(self.campo_cam_pixel.text())
+            self.cam_width = int(float(self.campo_cam_width.text()))
+            self.cam_height = int(float(self.campo_cam_height.text()))
+            self.cam_distance_mm = float(self.campo_cam_distance.text())
+
+            self.proj_focal_mm = float(self.campo_proj_focal.text())
+            self.proj_pixel_um = float(self.campo_proj_pixel.text())
+            self.proj_width = int(float(self.campo_proj_width.text()))
+            self.proj_height = int(float(self.campo_proj_height.text()))
+            self.proj_distance_mm = float(self.campo_proj_distance.text())
+            self.proj_angle_deg = float(self.campo_proj_angle.text())
+
+            self.obj_alpha_deg = float(self.campo_obj_alpha.text())
+            self.obj_beta_deg = float(self.campo_obj_beta.text())
+
+            if self.mesh is not None:
+                self._actualizar_visualizacion()
+        
+        except ValueError:
+            QMessageBox.critical(self, 'Error', 'Por favor verifica que todos los campos tengan valores numéricos válidos.')
 
     def _cargar_archivo(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -255,6 +302,9 @@ class MainWindow(QMainWindow):
         if self.mesh is not None:
             self._actualizar_visualizacion()
         
+    def _actualizar_label_intensidad(self, valor):
+        self.label_intensidad.setText(f'Intensidad: {valor}%')
+
     def _actualizar_info(self):
         info = self.mesh_info
         self.label_nombre.setText(info['nombre'])
@@ -315,52 +365,36 @@ class MainWindow(QMainWindow):
 
         self.plotter.reset_camera()
 
-    def _actualizar_label_intensidad(self, valor):
-        self.label_intensidad.setText(f'Intensidad: {valor}%')
-
-    def _actualizar_label_focal(self, valor):
-        self.focal_length = valor
-        self.label_focal.setText(f'Distancia focal: {valor}px')
-
-    def _actualizar_label_tz(self, valor):
-        self.traduccion[2] = valor
-        self.label_tz.setText(f'Distancia al objeto: {valor}')
-
-    def _actualizar_label_rx(self, valor):
-        self.rotacion[0] = valor
-        self.label_rx.setText(f'Rotacion X: {valor}°')
-
-    def _actualizar_label_ry(self, valor):
-        self.rotacion[1] = valor
-        self.label_ry.setText(f'Rotacion Y: {valor}°')
-
     def _visualizar_proyeccion(self):
         if self.mesh is None:
             return
         
-        cx = self.resolucion[0] / 2
-        cy = self.resolucion[1] / 2
-
-        K = build_intrinsic_matrix(self.focal_length, cx, cy)
-        Rt = build_extrinsic_matrix(self.traduccion, self.rotacion)
+        K, f_px, cx, cy = build_intrinsic_matrix(self.cam_focal_mm, self.cam_pixel_um, self.cam_width, self.cam_height)
 
         vertices = np.array(self.mesh.vertices)
-        puntos_2d, valid_mask = project_points(vertices, K, Rt)
 
+        vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px,
+        self.cam_width, self.cam_height, self.cam_distance_mm)
+
+        Rt_identity = np.hstack([np.eye(3), np.zeros((3, 1))])
+        puntos_2d, valid_mask = project_points(vertices_cam, K, Rt_identity)
         puntos_validos = puntos_2d[valid_mask]
 
-        self.plotter.clear()
-        self.plotter.set_background('#FFFFFF')
+        if len(puntos_validos) == 0:
+            QMessageBox.warning(self, 'Aviso', 'No hay puntos visibles en la configuración actual.')
+            return
 
-        ancho, alto = self.resolucion
-        puntos_validos[:, 0] = np.clip(puntos_validos[:, 0], 0, ancho)
-        puntos_validos[:, 1] = np.clip(puntos_validos[:, 1], 0, alto)
+        puntos_validos[:, 0] = np.clip(puntos_validos[:, 0], 0, self.cam_width)
+        puntos_validos[:, 1] = np.clip(puntos_validos[:, 1], 0, self.cam_height)
 
         puntos_3d = np.column_stack([
             puntos_validos[:, 0],
             puntos_validos[:, 1],
             np.zeros(len(puntos_validos))
         ])
+
+        self.plotter.clear()
+        self.plotter.set_background('#FFFFFF')
 
         point_cloud = pv.PolyData(puntos_3d)
         self.plotter.add_mesh(
