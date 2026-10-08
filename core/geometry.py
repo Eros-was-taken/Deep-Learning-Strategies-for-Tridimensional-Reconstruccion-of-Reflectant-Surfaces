@@ -52,3 +52,19 @@ def condition_mesh(vertices, alpha_deg, beta_deg, f_px, width, height, distance_
     vertices_cam[:, 2] += distance_mm
 
     return vertices_cam, scale, Lx, Ly
+
+def compute_system_geometry(distance_cam_mm, distance_proj_mm, angle_proj_deg, scale, cam_distance_mm):
+    mm_to_units = scale / cam_distance_mm
+
+    cam_center = np.array([0.0, 0.0, distance_cam_mm * mm_to_units])
+
+    theta = np.radians(angle_proj_deg)
+    proj_center = np.array([
+        distance_proj_mm * np.sin(theta) * mm_to_units,
+        0.0,
+        distance_proj_mm * np.cos(theta) * mm_to_units
+    ])
+
+    origin = np.array([0.0, 0.0, 0.0])
+
+    return cam_center, proj_center, origin

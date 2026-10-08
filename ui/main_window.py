@@ -12,7 +12,7 @@ from core.mesh_loader import load_mesh, extract_point_cloud
 from core.camera import (
     build_intrinsic_matrix, build_camera_extrinsic, build_projector_extrinsic, project_points, get_camera_center, compute_fov
 )
-from core.geometry import condition_mesh
+from core.geometry import condition_mesh, compute_system_geometry
 from ui.styles import STYLE
 
 class MainWindow(QMainWindow):
@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         titulo_modo = QLabel('MODO DE VISUALIZACION')
         titulo_modo.setObjectName('label_titulo')
         self.combo_modo = QComboBox()
-        self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara'])
+        self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo'])
         self.combo_modo.currentIndexChanged.connect(self._cambiar_modo)
 
         # Separador
@@ -296,8 +296,10 @@ class MainWindow(QMainWindow):
             self.modo_visualizacion = 'malla'
         elif self.combo_modo.currentIndex() == 1:
             self.modo_visualizacion = 'nube'
-        else:
+        elif self.combo_modo.currentIndex() == 2:
             self.modo_visualizacion = 'proyeccion'
+        else:
+            self.modo_visualizacion = 'sistema'
 
         if self.mesh is not None:
             self._actualizar_visualizacion()
@@ -362,6 +364,9 @@ class MainWindow(QMainWindow):
         elif self.modo_visualizacion == 'proyeccion':
             self._visualizar_proyeccion()
             return
+        elif self.modo_visualizacion == 'sistema':
+            self._visualizar_sistema()
+            return
 
         self.plotter.reset_camera()
 
@@ -405,4 +410,59 @@ class MainWindow(QMainWindow):
         )
 
         self.plotter.view_xy()
+        self.plotter.reset_camera()
+    
+    def _visualizar_sistema(self):
+        if self.mesh is None:
+            return
+        
+        K, f_px, cx, cy = build_intrinsic_matrix(self.cam_focal_mm, self.cam_pixel_um, self.cam_width, self.cam_height)
+
+        vertices = np.array(self.mesh.vertices)
+
+        vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px,
+        self.cam_width, self.cam_height, self.cam_distance_mm)
+
+        cam_center, proj_center, origin = compute_system_geometry(self.cam_distance_mm, self.proj_distance_mm, self.proj_angle_deg,
+        scale, self.cam_distance_mm)
+
+        self.plotter.clear()
+        self.plotter.set_background('#FFFFFF')
+
+        R_cam_inv = np.array([
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1]
+        ], dtype=float)
+
+        vertices_obj = (R_cam_inv @ (vertices_cam - [0, 0, self.cam_distance_mm]).T).T
+        pv_mesh = pv.PolyData(vertices_obj)
+        if hasattr(self.mesh, 'faces') and len(self.mesh.faces) > 0:
+            pv_mesh = pv.wrap(self.mesh)
+            pv_mesh.points = vertices_obj
+
+        self.plotter.add_mesh(pv_mesh, color='#DEE2E6', show_edges=False, smooth_shading=True, opacity=0.8)
+
+        cam_point = pv.PolyData(cam_center.reshape(1, 3))
+        self.plotter.add_mesh(cam_point, color='#2B6CB0', point_size=20, render_points_as_spheres=True)
+        self.plotter.add_point_labels(cam_center.reshape(1, 3), ['Cámara'], font_size=16, text_color='#2B6CB0', bold=True,
+        show_points=False, always_visible=True)
+
+        proj_point = pv.PolyData(proj_center.reshape(1, 3))
+        self.plotter.add_mesh(proj_point, color='#E53E3E', point_size=20, render_points_as_spheres=True)
+        self.plotter.add_point_labels(proj_center.reshape(1, 3), ['Proyector'], font_size=16, text_color='#E53E3E', bold=True,
+        show_points=False, always_visible=True)
+
+        linea_cam = pv.Line(cam_center, origin)
+        self.plotter.add_mesh(linea_cam, color='#2B6CB0', line_width=2)
+
+        linea_proj = pv.Line(proj_center, origin)
+        self.plotter.add_mesh(linea_proj, color='#E53E3E', line_width=2)
+
+        linea_base = pv.Line(cam_center, proj_center)
+        self.plotter.add_mesh(linea_base, color='718096', line_width=3)
+
+        self.plotter.show_grid()
+        self.plotter.view_xy()
+        self.plotter.camera.elevation = 15
         self.plotter.reset_camera()
