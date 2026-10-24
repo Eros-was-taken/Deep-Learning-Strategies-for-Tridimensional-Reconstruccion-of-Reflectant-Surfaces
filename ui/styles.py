@@ -168,4 +168,38 @@ STYLE = """
     QScrollBar::sub-line:vertical {
         height: 0px;
     }
+
+    QTabWidget {
+        background-color: #F8F9FA;
+        border: none;
+    }
+
+    QTabWidget::pane {
+        background-color: #FFFFFF;
+        border: 1px solid #DEE2E6;
+        border-radius: 6px;
+        padding: 8px;
+    }
+
+    QTabBar::tab {
+        background-color: #F8F9FA;
+        color: #718096;
+        border: 1px solid #DEE2E6;
+        border-bottom: none;
+        border-radius: 4px 4px 0 0;
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: bold;
+    }
+
+    QTabBar::tab:selected {
+        background-color: #FFFFFF;
+        color: #2B6CB0;
+        border-bottom: 2px solid #2B8CB0;
+    }
+
+    QTabBar::tab:hover {
+        background-color: #EBF4FF;
+        color: #2B6CB0;
+    }
 """

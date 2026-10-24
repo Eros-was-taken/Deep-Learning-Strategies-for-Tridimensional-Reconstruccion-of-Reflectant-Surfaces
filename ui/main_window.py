@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
-    QLineEdit, QGroupBox, QScrollArea
+    QLineEdit, QGroupBox, QScrollArea, QTabWidget
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
@@ -28,12 +28,12 @@ class MainWindow(QMainWindow):
         self.mesh_info = None
         self.modo_visualizacion = 'malla'
 
-        # Parametros fisicos camara
-        self.cam_focal_mm = 12.0
-        self.cam_pixel_um = 4.65
-        self.cam_width = 1024
-        self.cam_height = 768
-        self.cam_distance_mm = 1000.0
+        # Parametros fisicos sisara
+        self.sis_focal_mm = 12.0
+        self.sis_pixel_um = 4.65
+        self.sis_width = 1024
+        self.sis_height = 768
+        self.sis_distance_mm = 1000.0
 
         # Parametros fisicos projector
         self.proj_focal_mm = 12.0
@@ -56,23 +56,17 @@ class MainWindow(QMainWindow):
         layout_principal.setSpacing(10)
         layout_principal.setContentsMargins(10, 10, 10, 10)
 
-        # Panel izquierdo con Scroll
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFixedWidth(280)
+        # Panel izquierdo con pestañas
+        self.tabs = QTabWidget()
+        self.tabs.setFixedWidth(280)
 
-        panel_scroll = QWidget()
-        layout_izquierdo = QVBoxLayout(panel_scroll)
-        layout_izquierdo.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout_izquierdo.setSpacing(12)
-        layout_izquierdo.setContentsMargins(12, 12, 12, 12)
-
-        scroll_area.setWidget(panel_scroll)
-
-        # Titulo del panel
-        titulo_panel = QLabel('MODELO 3D')
-        titulo_panel.setObjectName('label_titulo')
-
+        # Pestaña 1 - Visualizacion
+        tab_vis = QWidget()
+        layout_vis = QVBoxLayout(tab_vis)
+        layout_vis.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout_vis.setSpacing(12)
+        layout_vis.setContentsMargins(12, 12, 12, 12)
+        
         # Boton para cargar archivo
         self.btn_cargar = QPushButton('Cargar archivo .ply')
         self.btn_cargar.setFixedHeight(40)
@@ -126,40 +120,6 @@ class MainWindow(QMainWindow):
         sep3.setFrameShape(QFrame.Shape.HLine)
         sep3.setFixedHeight(1)
 
-        # Grupo camara
-        grupo_camara = QGroupBox('Cámara')
-        layout_camara = QVBoxLayout(grupo_camara)
-        layout_camara.setSpacing(6)
-
-        self.campo_cam_focal = self._crear_campo(layout_camara, 'Longitud focal (mm):', '12.0')
-        self.campo_cam_pixel = self._crear_campo(layout_camara, 'Paso de píxel (µm):', '4.65')
-        self.campo_cam_width, self.campo_cam_height = self._crear_campo_resolucion(layout_camara, 'Resolución:', '1024', '768')
-        self.campo_cam_distance = self._crear_campo(layout_camara, 'Distancia (mm):', '1000.0')
-        
-        self.campo_obj_alpha = self._crear_campo(layout_camara, 'Rotación objeto X (°)', '0.0')
-        self.campo_obj_beta = self._crear_campo(layout_camara, 'Rotación objeto Y (°)', '0.0')
-
-        # Grupo proyector
-        grupo_proyector = QGroupBox('Proyector')
-        layout_proyector = QVBoxLayout(grupo_proyector)
-        layout_proyector.setSpacing(6)
-
-        self.campo_proj_focal = self._crear_campo(layout_proyector, 'Longitud focal (mm):', '12.0')
-        self.campo_proj_pixel = self._crear_campo(layout_proyector, 'Paso de píxel (µm):', '4.50')
-        self.campo_proj_width, self.campo_proj_height = self._crear_campo_resolucion(layout_proyector, 'Resolución:', '1024', '768')
-        self.campo_proj_distance = self._crear_campo(layout_proyector, 'Distancia (mm):', '1000.0')
-        self.campo_proj_angle = self._crear_campo(layout_proyector, 'Ángulo (°):', '12.0')
-
-        # Boton para aplicar configuracion
-        self.btn_aplicar = QPushButton('Aplicar configuración')
-        self.btn_aplicar.setFixedHeight(40)
-        self.btn_aplicar.clicked.connect(self._aplicar_configuracion)
-
-        # Separador
-        sep4 = QFrame()
-        sep4.setFrameShape(QFrame.Shape.HLine)
-        sep4.setFixedHeight(1)
-
         # Etiquetas de informacion
         titulo_info = QLabel('INFORMACION')
         titulo_info.setObjectName('label_titulo')
@@ -185,38 +145,106 @@ class MainWindow(QMainWindow):
         self.label_dim.setObjectName('label_valor')
         self.label_dim.setWordWrap(True)
 
-        # Agregar elementos al panel izquierdo
-        layout_izquierdo.addWidget(titulo_panel)
-        layout_izquierdo.addWidget(self.btn_cargar)
-        layout_izquierdo.addWidget(sep1)
-        layout_izquierdo.addWidget(titulo_modo)
-        layout_izquierdo.addWidget(self.combo_modo)
-        layout_izquierdo.addWidget(sep2)
-        layout_izquierdo.addWidget(titulo_luz)
-        layout_izquierdo.addWidget(self.label_intensidad)
-        layout_izquierdo.addWidget(self.slider_intensidad)
-        layout_izquierdo.addWidget(titulo_posicion)
-        layout_izquierdo.addWidget(self.combo_posicion)
-        layout_izquierdo.addWidget(self.check_suavizado)
-        layout_izquierdo.addWidget(sep3)
-        layout_izquierdo.addWidget(grupo_camara)
-        layout_izquierdo.addWidget(grupo_proyector)
-        layout_izquierdo.addWidget(self.btn_aplicar)
-        layout_izquierdo.addWidget(sep4)
-        layout_izquierdo.addWidget(titulo_info)
-        layout_izquierdo.addWidget(self.label_nombre_titulo)
-        layout_izquierdo.addWidget(self.label_nombre)
-        layout_izquierdo.addWidget(self.label_puntos_titulo)
-        layout_izquierdo.addWidget(self.label_puntos)
-        layout_izquierdo.addWidget(self.label_caras_titulo)
-        layout_izquierdo.addWidget(self.label_caras)
-        layout_izquierdo.addWidget(self.label_dim_titulo)
-        layout_izquierdo.addWidget(self.label_dim)
+        layout_vis.addWidget(self.btn_cargar)
+        layout_vis.addWidget(sep1)
+        layout_vis.addWidget(titulo_modo)
+        layout_vis.addWidget(self.combo_modo)
+        layout_vis.addWidget(sep2)
+        layout_vis.addWidget(titulo_luz)
+        layout_vis.addWidget(self.label_intensidad)
+        layout_vis.addWidget(self.slider_intensidad)
+        layout_vis.addWidget(titulo_posicion)
+        layout_vis.addWidget(self.combo_posicion)
+        layout_vis.addWidget(self.check_suavizado)
+        layout_vis.addWidget(sep3)
+        layout_vis.addWidget(titulo_info)
+        layout_vis.addWidget(self.label_nombre_titulo)
+        layout_vis.addWidget(self.label_nombre)
+        layout_vis.addWidget(self.label_puntos_titulo)
+        layout_vis.addWidget(self.label_puntos)
+        layout_vis.addWidget(self.label_caras_titulo)
+        layout_vis.addWidget(self.label_caras)
+        layout_vis.addWidget(self.label_dim_titulo)
+        layout_vis.addWidget(self.label_dim)
+
+        # Pestaña 2 - Sistema
+        tab_sistema = QWidget()
+        scroll_sis = QScrollArea()
+        scroll_sis.setWidgetResizable(True)
+        panel_sis = QWidget()
+        layout_sis = QVBoxLayout(panel_sis)
+        layout_sis.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout_sis.setSpacing(8)
+        layout_sis.setContentsMargins(12, 12, 12, 12)
+        scroll_sis.setWidget(panel_sis)
+
+        layout_sis_outer = QVBoxLayout(tab_sistema)
+        layout_sis_outer.setContentsMargins(0, 0, 0, 0)
+        layout_sis_outer.addWidget(scroll_sis)
+
+        # Grupo camara
+        grupo_camara = QGroupBox('Cámara')
+        layout_camara = QVBoxLayout(grupo_camara)
+        layout_camara.setSpacing(6)
+
+        self.campo_cam_focal = self._crear_campo(layout_camara, 'Longitud focal (mm):', '12.0')
+        self.campo_cam_pixel = self._crear_campo(layout_camara, 'Paso de píxel (µm):', '4.65')
+        self.campo_cam_width, self.campo_cam_height = self._crear_campo_resolucion(layout_camara, 'Resolución:', '1024', '768')
+        self.campo_cam_distance = self._crear_campo(layout_camara, 'Distancia (mm):', '1000.0')
+
+        # Grupo proyector
+        grupo_proyector = QGroupBox('Proyector')
+        layout_proyector = QVBoxLayout(grupo_proyector)
+        layout_proyector.setSpacing(6)
+
+        self.campo_proj_focal = self._crear_campo(layout_proyector, 'Longitud focal (mm):', '12.0')
+        self.campo_proj_pixel = self._crear_campo(layout_proyector, 'Paso de píxel (µm):', '4.50')
+        self.campo_proj_width, self.campo_proj_height = self._crear_campo_resolucion(layout_proyector, 'Resolución:', '1024', '768')
+        self.campo_proj_distance = self._crear_campo(layout_proyector, 'Distancia (mm):', '1000.0')
+        self.campo_proj_angle = self._crear_campo(layout_proyector, 'Ángulo (°):', '12.0')
+
+        # Grupo orientacion del objeto
+        grupo_objeto = QGroupBox('Orientación del objeto')
+        layout_objeto = QVBoxLayout(grupo_objeto)
+        layout_objeto.setSpacing(6)
+        
+        self.campo_obj_alpha = self._crear_campo(layout_objeto, 'Rotación objeto X (°)', '0.0')
+        self.campo_obj_beta = self._crear_campo(layout_objeto, 'Rotación objeto Y (°)', '0.0')
+
+        # Boton para aplicar configuracion
+        btn_aplicar = QPushButton('Aplicar configuración')
+        btn_aplicar.setFixedHeight(40)
+        btn_aplicar.clicked.connect(self._aplicar_configuracion)
+
+        titulo_modo_sis = QLabel('MODO DE VISUALIZACIÓN')
+        titulo_modo_sis.setObjectName('label_titulo')
+
+        self.combo_modo_sis = QComboBox()
+        self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo'])
+        self.combo_modo_sis.setCurrentIndex(2)
+        self.combo_modo_sis.currentIndexChanged.connect(self._cambiar_modo_sis)
+
+        sep_sis = QFrame()
+        sep_sis.setFrameShape(QFrame.Shape.HLine)
+        sep_sis.setFixedHeight(1)
+
+        layout_sis.addWidget(titulo_modo_sis)
+        layout_sis.addWidget(self.combo_modo_sis)
+        layout_sis.addWidget(sep_sis)
+
+        layout_sis.addWidget(grupo_camara)
+        layout_sis.addWidget(grupo_proyector)
+        layout_sis.addWidget(grupo_objeto)
+        layout_sis.addWidget(btn_aplicar)
+
+        # Agregar pestañas
+        self.tabs.addTab(tab_vis, 'Visualización')
+        self.tabs.addTab(tab_sistema, 'Sistema')
 
         # Panel derecho - Visualizacion 3D
         self.plotter = QtInteractor(self)
 
-        layout_principal.addWidget(scroll_area)
+        layout_principal.addWidget(self.tabs)
         layout_principal.addWidget(self.plotter)
 
     def _crear_campo(self, layout, etiqueta, valor_default):
@@ -298,12 +326,20 @@ class MainWindow(QMainWindow):
             self.modo_visualizacion = 'nube'
         elif self.combo_modo.currentIndex() == 2:
             self.modo_visualizacion = 'proyeccion'
+            self.tabs.setCurrentIndex(1)
         else:
             self.modo_visualizacion = 'sistema'
+            self.tabs.setCurrentIndex(1)
 
         if self.mesh is not None:
             self._actualizar_visualizacion()
         
+    def _cambiar_modo_sis(self):
+        index = self.combo_modo_sis.currentIndex()
+        self.combo_modo.setCurrentIndex(index)
+        if index in [0, 1]:
+            self.tabs.setCurrentIndex(0)
+
     def _actualizar_label_intensidad(self, valor):
         self.label_intensidad.setText(f'Intensidad: {valor}%')
 
