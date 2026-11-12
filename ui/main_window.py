@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
-    QLineEdit, QGroupBox, QScrollArea, QTabWidget
+    QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
@@ -13,6 +13,8 @@ from core.camera import (
     build_intrinsic_matrix, build_camera_extrinsic, build_projector_extrinsic, project_points, get_camera_center, compute_fov
 )
 from core.geometry import condition_mesh, compute_system_geometry
+from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords
+from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
 class MainWindow(QMainWindow):
@@ -45,6 +47,8 @@ class MainWindow(QMainWindow):
 
         self.obj_alpha_deg = 0.0
         self.obj_beta_deg = 0.0
+
+        self._cache_visibilidad = None
         
         self._build_ui()
 
@@ -81,7 +85,8 @@ class MainWindow(QMainWindow):
         titulo_modo = QLabel('MODO DE VISUALIZACION')
         titulo_modo.setObjectName('label_titulo')
         self.combo_modo = QComboBox()
-        self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo'])
+        self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
+                                'Mapa de coordenadas del proyector'])
         self.combo_modo.currentIndexChanged.connect(self._cambiar_modo)
 
         # Separador
@@ -220,8 +225,9 @@ class MainWindow(QMainWindow):
         titulo_modo_sis.setObjectName('label_titulo')
 
         self.combo_modo_sis = QComboBox()
-        self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo'])
-        self.combo_modo_sis.setCurrentIndex(2)
+        self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
+                                    'Mapa de coordenadas del proyector'])
+        self.combo_modo_sis.setCurrentIndex(0)
         self.combo_modo_sis.currentIndexChanged.connect(self._cambiar_modo_sis)
 
         sep_sis = QFrame()
@@ -243,9 +249,14 @@ class MainWindow(QMainWindow):
 
         # Panel derecho - Visualizacion 3D
         self.plotter = QtInteractor(self)
+        self.visor_2d = ImageViewer()
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.plotter)
+        self.stack.addWidget(self.visor_2d)
 
         layout_principal.addWidget(self.tabs)
-        layout_principal.addWidget(self.plotter)
+        layout_principal.addWidget(self.stack)
 
     def _crear_campo(self, layout, etiqueta, valor_default):
         label = QLabel(etiqueta)
@@ -313,6 +324,7 @@ class MainWindow(QMainWindow):
 
         try:
             self.mesh, self.mesh_info = load_mesh(file_path)
+            self._cache_visibilidad = None
             self._actualizar_info()
             self._actualizar_visualizacion()
 
@@ -320,19 +332,18 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'Error', str(e))
     
     def _cambiar_modo(self):
-        if self.combo_modo.currentIndex() == 0:
-            self.modo_visualizacion = 'malla'
-        elif self.combo_modo.currentIndex() == 1:
-            self.modo_visualizacion = 'nube'
-        elif self.combo_modo.currentIndex() == 2:
-            self.modo_visualizacion = 'proyeccion'
-            self.tabs.setCurrentIndex(1)
-        else:
-            self.modo_visualizacion = 'sistema'
-            self.tabs.setCurrentIndex(1)
+        indice = self.combo_modo.currentIndex()
+        modos = ['malla', 'nube', 'proyeccion', 'sistema', 'visibilidad', 'normales', 'proyector']
+        self.modo_visualizacion = modos[indice]
 
-        if self.mesh is not None:
-            self._actualizar_visualizacion()
+        if indice >= 2:
+            self.tabs.setCurrentIndex(1)
+        
+        self.combo_modo_sis.blockSignals(True)
+        self.combo_modo_sis.setCurrentIndex(indice)
+        self.combo_modo_sis.blockSignals(False)
+
+        self._actualizar_visualizacion()
         
     def _cambiar_modo_sis(self):
         index = self.combo_modo_sis.currentIndex()
@@ -355,7 +366,16 @@ class MainWindow(QMainWindow):
         )
     
     def _actualizar_visualizacion(self):
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector'):
+            self.stack.setCurrentIndex(1)
+        else:
+            self.stack.setCurrentIndex(0)
+
         if self.mesh is None:
+            return
+        
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector'):
+            self._visualizar_visibilidad()
             return
 
         self.plotter.clear()
@@ -502,3 +522,41 @@ class MainWindow(QMainWindow):
         self.plotter.view_xy()
         self.plotter.camera.elevation = 15
         self.plotter.reset_camera()
+    
+    def _visualizar_visibilidad(self):
+        clave = (self.sis_focal_mm, self.sis_pixel_um, self.sis_width, self.sis_height, self.sis_distance_mm, self.obj_alpha_deg, self.obj_beta_deg)
+
+        cache = self._cache_visibilidad
+        if cache is None or cache['clave'] != clave:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                K, f_px, cx, cy = build_intrinsic_matrix(self.sis_focal_mm, self.sis_pixel_um, self.sis_width, self.sis_height)
+
+                vertices = np.array(self.mesh.vertices)
+                vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px, self.sis_width, self.sis_height, self.sis_distance_mm)
+
+                faces = np.array(self.mesh.faces)
+                depth, face_id, omega_cam = rasterize_zbuffer(vertices_cam, faces, K, self.sis_width, self.sis_height)
+
+                P, N = compute_point_map_and_normals(vertices_cam, faces, face_id, depth, K)
+            finally:
+                QApplication.restoreOverrideCursor()
+            
+            cache = {'clave': clave, 'depth': depth, 'face_id': face_id, 'omega_cam': omega_cam, 'P': P, 'N': N}
+            self._cache_visibilidad = cache
+        
+        omega = cache['omega_cam']
+        porcentaje = 100.0 * omega.sum() / omega.size
+    
+        if self.modo_visualizacion == 'proyector':
+            K_p, _, _, _ = build_intrinsic_matrix(self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height)
+            _, R_po, t_po = build_projector_extrinsic(self.proj_distance_mm, self.proj_angle_deg)
+            u_p, v_p, z_p = camera_to_projector_coords(cache['P'], R_po, t_po, K_p, self.sis_distance_mm)
+            dentro = (omega & (u_p >= 1) & (u_p <= self.proj_width) & (v_p >= 1) & (v_p <= self.proj_height))
+            self.visor_2d.show_depth(u_p, omega, title=f'u_p · {dentro.sum():,} de {omega.sum():,} píxeles caen dentro del proyector', cbar_label='Columna del proyector u_p (px)')
+            return
+
+        if self.modo_visualizacion == 'normales':
+            self.visor_2d.show_normals(cache['N'], omega, title=f'Normales (RGB = (n+1)/2 · {omega.sum():,} píxeles)')
+        else:
+            self.visor_2d.show_depth(cache['depth'], omega, title=f'Ω_cam: {omega.sum():,} píxeles ({porcentaje:.1f} %)')
