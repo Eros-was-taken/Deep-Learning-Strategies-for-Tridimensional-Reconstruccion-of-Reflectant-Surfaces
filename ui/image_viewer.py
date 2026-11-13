@@ -70,3 +70,34 @@ class ImageViewer(QWidget):
 
         self.figure.tight_layout()
         self.canvas.draw_idle()
+
+    def show_categories(self, labels, names, colors, title=''):
+        from matplotlib.colors import ListedColormap, BoundaryNorm
+        from matplotlib.patches import Patch
+
+        alto, ancho = labels.shape
+
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+
+        n = len(names)
+        cmap = ListedColormap(colors)
+        norm = BoundaryNorm(np.arange(-0.5, n + 0.5, 1.0), cmap.N)
+        ax.imshow(labels, cmap=cmap, norm=norm, interpolation='nearest', extent=(0.5, ancho + 0.5, alto + 0.5, 0.5))
+
+        total = max(int((labels > 0).sum()), 1)
+        handles = []
+        for k in range(1, n):
+            cuenta = int((labels == k).sum())
+            if cuenta > 0:
+                handles.append(Patch(facecolor=colors[k], edgecolor='#475569', label=f'{names[k]}: {cuenta:,} ({100.0 * cuenta / total:.1f} %)'))
+
+        if handles:
+            ax.legend(handles=handles, loc='upper right', fontsize=9, framealpha=0.95)
+
+        ax.set_xlabel('Columna u (px)')
+        ax.set_ylabel('Fila v (px)')
+        ax.set_title(title, fontsize=11)
+        
+        self.figure.tight_layout()
+        self.canvas.draw_idle()

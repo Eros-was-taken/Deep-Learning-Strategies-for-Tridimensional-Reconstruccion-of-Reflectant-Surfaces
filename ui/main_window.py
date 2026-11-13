@@ -13,7 +13,7 @@ from core.camera import (
     build_intrinsic_matrix, build_camera_extrinsic, build_projector_extrinsic, project_points, get_camera_center, compute_fov
 )
 from core.geometry import condition_mesh, compute_system_geometry
-from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords
+from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
         titulo_modo.setObjectName('label_titulo')
         self.combo_modo = QComboBox()
         self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                'Mapa de coordenadas del proyector'])
+                                'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)'])
         self.combo_modo.currentIndexChanged.connect(self._cambiar_modo)
 
         # Separador
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
 
         self.combo_modo_sis = QComboBox()
         self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                    'Mapa de coordenadas del proyector'])
+                                    'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)'])
         self.combo_modo_sis.setCurrentIndex(0)
         self.combo_modo_sis.currentIndexChanged.connect(self._cambiar_modo_sis)
 
@@ -289,11 +289,11 @@ class MainWindow(QMainWindow):
     
     def _aplicar_configuracion(self):
         try:
-            self.cam_focal_mm = float(self.campo_cam_focal.text())
-            self.cam_pixel_um = float(self.campo_cam_pixel.text())
-            self.cam_width = int(float(self.campo_cam_width.text()))
-            self.cam_height = int(float(self.campo_cam_height.text()))
-            self.cam_distance_mm = float(self.campo_cam_distance.text())
+            self.sis_focal_mm = float(self.campo_cam_focal.text())
+            self.sis_pixel_um = float(self.campo_cam_pixel.text())
+            self.sis_width = int(float(self.campo_cam_width.text()))
+            self.sis_height = int(float(self.campo_cam_height.text()))
+            self.sis_distance_mm = float(self.campo_cam_distance.text())
 
             self.proj_focal_mm = float(self.campo_proj_focal.text())
             self.proj_pixel_um = float(self.campo_proj_pixel.text())
@@ -333,7 +333,7 @@ class MainWindow(QMainWindow):
     
     def _cambiar_modo(self):
         indice = self.combo_modo.currentIndex()
-        modos = ['malla', 'nube', 'proyeccion', 'sistema', 'visibilidad', 'normales', 'proyector']
+        modos = ['malla', 'nube', 'proyeccion', 'sistema', 'visibilidad', 'normales', 'proyector', 'sombras']
         self.modo_visualizacion = modos[indice]
 
         if indice >= 2:
@@ -366,7 +366,7 @@ class MainWindow(QMainWindow):
         )
     
     def _actualizar_visualizacion(self):
-        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector'):
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras'):
             self.stack.setCurrentIndex(1)
         else:
             self.stack.setCurrentIndex(0)
@@ -374,7 +374,7 @@ class MainWindow(QMainWindow):
         if self.mesh is None:
             return
         
-        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector'):
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras'):
             self._visualizar_visibilidad()
             return
 
@@ -430,12 +430,12 @@ class MainWindow(QMainWindow):
         if self.mesh is None:
             return
         
-        K, f_px, cx, cy = build_intrinsic_matrix(self.cam_focal_mm, self.cam_pixel_um, self.cam_width, self.cam_height)
+        K, f_px, cx, cy = build_intrinsic_matrix(self.sis_focal_mm, self.sis_pixel_um, self.sis_width, self.sis_height)
 
         vertices = np.array(self.mesh.vertices)
 
         vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px,
-        self.cam_width, self.cam_height, self.cam_distance_mm)
+        self.sis_width, self.sis_height, self.sis_distance_mm)
 
         Rt_identity = np.hstack([np.eye(3), np.zeros((3, 1))])
         puntos_2d, valid_mask = project_points(vertices_cam, K, Rt_identity)
@@ -445,8 +445,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, 'Aviso', 'No hay puntos visibles en la configuración actual.')
             return
 
-        puntos_validos[:, 0] = np.clip(puntos_validos[:, 0], 0, self.cam_width)
-        puntos_validos[:, 1] = np.clip(puntos_validos[:, 1], 0, self.cam_height)
+        puntos_validos[:, 0] = np.clip(puntos_validos[:, 0], 0, self.sis_width)
+        puntos_validos[:, 1] = np.clip(puntos_validos[:, 1], 0, self.sis_height)
 
         puntos_3d = np.column_stack([
             puntos_validos[:, 0],
@@ -472,15 +472,15 @@ class MainWindow(QMainWindow):
         if self.mesh is None:
             return
         
-        K, f_px, cx, cy = build_intrinsic_matrix(self.cam_focal_mm, self.cam_pixel_um, self.cam_width, self.cam_height)
+        K, f_px, cx, cy = build_intrinsic_matrix(self.sis_focal_mm, self.sis_pixel_um, self.sis_width, self.sis_height)
 
         vertices = np.array(self.mesh.vertices)
 
         vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px,
-        self.cam_width, self.cam_height, self.cam_distance_mm)
+        self.sis_width, self.sis_height, self.sis_distance_mm)
 
-        cam_center, proj_center, origin = compute_system_geometry(self.cam_distance_mm, self.proj_distance_mm, self.proj_angle_deg,
-        scale, self.cam_distance_mm)
+        cam_center, proj_center, origin = compute_system_geometry(self.sis_distance_mm, self.proj_distance_mm, self.proj_angle_deg,
+        scale, self.sis_distance_mm)
 
         self.plotter.clear()
         self.plotter.set_background('#FFFFFF')
@@ -491,7 +491,7 @@ class MainWindow(QMainWindow):
             [0, 0, -1]
         ], dtype=float)
 
-        vertices_obj = (R_cam_inv @ (vertices_cam - [0, 0, self.cam_distance_mm]).T).T
+        vertices_obj = (R_cam_inv @ (vertices_cam - [0, 0, self.sis_distance_mm]).T).T
         pv_mesh = pv.PolyData(vertices_obj)
         if hasattr(self.mesh, 'faces') and len(self.mesh.faces) > 0:
             pv_mesh = pv.wrap(self.mesh)
@@ -542,7 +542,7 @@ class MainWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
             
-            cache = {'clave': clave, 'depth': depth, 'face_id': face_id, 'omega_cam': omega_cam, 'P': P, 'N': N}
+            cache = {'clave': clave, 'depth': depth, 'face_id': face_id, 'omega_cam': omega_cam, 'P': P, 'N': N, 'vertices_cam': vertices_cam, 'faces': faces}
             self._cache_visibilidad = cache
         
         omega = cache['omega_cam']
@@ -554,6 +554,26 @@ class MainWindow(QMainWindow):
             u_p, v_p, z_p = camera_to_projector_coords(cache['P'], R_po, t_po, K_p, self.sis_distance_mm)
             dentro = (omega & (u_p >= 1) & (u_p <= self.proj_width) & (v_p >= 1) & (v_p <= self.proj_height))
             self.visor_2d.show_depth(u_p, omega, title=f'u_p · {dentro.sum():,} de {omega.sum():,} píxeles caen dentro del proyector', cbar_label='Columna del proyector u_p (px)')
+            return
+        
+        if self.modo_visualizacion == 'sombras':
+            clave_proy = (self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height, self.proj_distance_mm, self.proj_angle_deg)
+            if cache.get('clave_proy') != clave_proy:
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    K_p, _, _, _ = build_intrinsic_matrix(self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height)
+                    _, R_po, t_po = build_projector_extrinsic(self.proj_distance_mm, self.proj_angle_deg)
+                    etiquetas, _ = compute_projector_visibility(cache['vertices_cam'], cache['faces'], cache['P'], cache['N'], omega, R_po, t_po, K_p, self.sis_distance_mm,
+                                                                self.proj_width, self.proj_height)
+                finally:
+                    QApplication.restoreOverrideCursor()
+                cache['clave_proy'] = clave_proy
+                cache['etiquetas'] = etiquetas
+            
+            etiquetas = cache['etiquetas']
+            n_map = int((etiquetas == ETQ_ILUMINADO).sum())
+            self.visor_2d.show_categories(etiquetas, ['Fuera de Ω_cam', 'Iluminado (Ω_map)', 'Fuera del campo del proyector', 'Sombra propia', 'Sombra proyectada'],
+                                        ['#E2E8F0', '#F4D35E', '#9AA5B1', '#3B4A6B', '#1B1F3B'], title=f'Ω_map: {n_map:,} de {omega.sum():,} píxeles de Ω_cam iluminados')
             return
 
         if self.modo_visualizacion == 'normales':
