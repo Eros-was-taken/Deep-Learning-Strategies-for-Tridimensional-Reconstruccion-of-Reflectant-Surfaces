@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
     QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QLocale
 from PySide6.QtGui import QDoubleValidator
 import pyvista as pv
 from pyvistaqt import QtInteractor
@@ -14,9 +14,18 @@ from core.camera import (
 )
 from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
-from core.radiometry import ideal_fringe_image
+from core.radiometry import ideal_fringe_image, apply_noise_and_gamma
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
+
+class ValidadorNumerico(QDoubleValidator):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLocale(QLocale(QLocale.Language.C))
+        self.setNotation(QDoubleValidator.Notation.ScientificNotation)
+
+    def validate(self, texto, pos):
+        return super().validate(texto.replace(',', '.'), pos)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -57,6 +66,11 @@ class MainWindow(QMainWindow):
         self.fr_k = 1
         self.fr_n_pasos = 12
         self.fr_ambiente = 0.05
+
+        self.fr_sigma = 0.01
+        self.fr_semilla = 2026
+        self.fr_gamma = 2.6
+        self.fr_etapa = 0
         
         self._build_ui()
 
@@ -94,7 +108,7 @@ class MainWindow(QMainWindow):
         titulo_modo.setObjectName('label_titulo')
         self.combo_modo = QComboBox()
         self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen ideal de franjas'])
+                                'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen de franjas'])
         self.combo_modo.currentIndexChanged.connect(self._cambiar_modo)
 
         # Separador
@@ -234,7 +248,7 @@ class MainWindow(QMainWindow):
 
         self.combo_modo_sis = QComboBox()
         self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                    'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen ideal de franjas'])
+                                    'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen de franjas'])
         self.combo_modo_sis.setCurrentIndex(0)
         self.combo_modo_sis.currentIndexChanged.connect(self._cambiar_modo_sis)
 
@@ -266,6 +280,30 @@ class MainWindow(QMainWindow):
         layout_fr_outer.setContentsMargins(0, 0, 0, 0)
         layout_fr_outer.addWidget(scroll_fr)
 
+        # Grupo imagen mostrada (controles en vivo)
+        grupo_imagen = QGroupBox('Imagen mostrada')
+        layout_imagen = QVBoxLayout(grupo_imagen)
+        layout_imagen.setSpacing(6)
+
+        label_etapa = QLabel('Etapa')
+        label_etapa.setObjectName('label_valor')
+        self.combo_fr_etapa = QComboBox()
+        self.combo_fr_etapa.addItems(['Ideal', 'Con ruido', 'Con ruido y gamma'])
+        self.combo_fr_etapa.currentIndexChanged.connect(self._cambiar_etapa_franja)
+
+        self.label_fr_k = QLabel('Imagen k: 1 de 12')
+        self.label_fr_k.setObjectName('label_valor')
+        self.slider_fr_k = QSlider(Qt.Orientation.Horizontal)
+        self.slider_fr_k.setMinimum(1)
+        self.slider_fr_k.setMaximum(12)
+        self.slider_fr_k.setValue(1)
+        self.slider_fr_k.valueChanged.connect(self._cambiar_k_franja)
+
+        layout_imagen.addWidget(label_etapa)
+        layout_imagen.addWidget(self.combo_fr_etapa)
+        layout_imagen.addWidget(self.label_fr_k)
+        layout_imagen.addWidget(self.slider_fr_k)
+
         # Grupo patron de franjas
         grupo_patron = QGroupBox('Patrón de franjas')
         layout_patron = QVBoxLayout(grupo_patron)
@@ -276,27 +314,22 @@ class MainWindow(QMainWindow):
         self.campo_fr_u0 = self._crear_campo(layout_patron, 'Origen de fase u0p (px):', '1.0')
         self.campo_fr_ambiente = self._crear_campo(layout_patron, 'Intensidad ambiente I_amb:', '0.05')
 
-        # Grupo imagen mostrada
-        grupo_imagen = QGroupBox('Imagen mostrada')
-        layout_imagen = QVBoxLayout(grupo_imagen)
-        layout_imagen.setSpacing(6)
+        # Grupo degradaciones
+        grupo_degr = QGroupBox('Degradaciones')
+        layout_degr = QVBoxLayout(grupo_degr)
+        layout_degr.setSpacing(6)
 
-        self.label_fr_k = QLabel('Imagen k: 1 de 12')
-        self.label_fr_k.setObjectName('label_valor')
-        self.slider_fr_k = QSlider(Qt.Orientation.Horizontal)
-        self.slider_fr_k.setMinimum(1)
-        self.slider_fr_k.setMaximum(12)
-        self.slider_fr_k.setValue(1)
-        self.slider_fr_k.valueChanged.connect(self._cambiar_k_franja)
-        layout_imagen.addWidget(self.label_fr_k)
-        layout_imagen.addWidget(self.slider_fr_k)
+        self.campo_fr_sigma = self._crear_campo(layout_degr, 'Ruido: desviación σ:', '0.01')
+        self.campo_fr_semilla = self._crear_campo(layout_degr, 'Ruido: semilla:', '2026')
+        self.campo_fr_gamma = self._crear_campo(layout_degr, 'Gamma γ:', '2.6')
 
         btn_aplicar_fr = QPushButton('Aplicar y mostrar franjas')
         btn_aplicar_fr.setFixedHeight(40)
         btn_aplicar_fr.clicked.connect(self._aplicar_franjas)
 
-        layout_fr.addWidget(grupo_patron)
         layout_fr.addWidget(grupo_imagen)
+        layout_fr.addWidget(grupo_patron)
+        layout_fr.addWidget(grupo_degr)
         layout_fr.addWidget(btn_aplicar_fr)
 
         # Agregar pestañas
@@ -319,7 +352,7 @@ class MainWindow(QMainWindow):
         label = QLabel(etiqueta)
         label.setObjectName('label_valor')
         campo = QLineEdit(valor_default)
-        campo.setValidator(QDoubleValidator())
+        campo.setValidator(ValidadorNumerico())
         layout.addWidget(label)
         layout.addWidget(campo)
         return campo
@@ -333,11 +366,11 @@ class MainWindow(QMainWindow):
         fila_layout.setContentsMargins(0, 0, 0, 0)
         fila_layout.setSpacing(6)
         campo_w = QLineEdit(valor_w)
-        campo_w.setValidator(QDoubleValidator())
+        campo_w.setValidator(ValidadorNumerico())
         label_x = QLabel('x')
         label_x.setObjectName('label_valor')
         campo_h = QLineEdit(valor_h)
-        campo_h.setValidator(QDoubleValidator())
+        campo_h.setValidator(ValidadorNumerico())
         fila_layout.addWidget(campo_w)
         fila_layout.addWidget(label_x)
         fila_layout.addWidget(campo_h)
@@ -625,7 +658,11 @@ class MainWindow(QMainWindow):
             omega_map = etiquetas == ETQ_ILUMINADO
             imagen, _, _ = ideal_fringe_image(info['u_p'], info['n_dot_l'], omega, omega_map, period_px=self.fr_periodo_px, u0_px=self.fr_u0_px, k=self.fr_k, n_steps=self.fr_n_pasos,
                                             ambient=self.fr_ambiente)
-            self.visor_2d.show_intensity(imagen, title=f'Imagen ideal I_k (k = {self.fr_k} de {self.fr_n_pasos} · T_p = {self.fr_periodo_px:g} px)')
+            nombres_etapa = ['ideal', 'con ruido', 'con ruido y gamma']
+            if self.fr_etapa > 0:
+                I_ruido, I_gamma = apply_noise_and_gamma(imagen, omega_map, sigma=self.fr_sigma, gamma=self.fr_gamma, seed=self.fr_semilla, k=self.fr_k)
+                imagen = I_ruido if self.fr_etapa == 1 else I_gamma
+            self.visor_2d.show_intensity(imagen, title=f'Imagen {nombres_etapa[self.fr_etapa]} I_k (k = {self.fr_k} de {self.fr_n_pasos} · T_p = {self.fr_periodo_px:g} px)')
             return
 
         if self.modo_visualizacion == 'normales':
@@ -655,6 +692,9 @@ class MainWindow(QMainWindow):
             n_pasos = int(float(self.campo_fr_pasos.text()))
             u0 = float(self.campo_fr_u0.text())
             ambiente = float(self.campo_fr_ambiente.text())
+            sigma = float(self.campo_fr_sigma.text())
+            semilla = int(float(self.campo_fr_semilla.text()))
+            gamma = float(self.campo_fr_gamma.text())
         except ValueError:
             QMessageBox.critical(self, 'Error', 'Por favor verifica que todos los campos tengan valores numéricos válidos.')
             return
@@ -668,11 +708,23 @@ class MainWindow(QMainWindow):
         if not 0.0 <= ambiente <= 1.0:
             QMessageBox.critical(self, 'Error', 'La intensidad ambiente debe estar entre 0 y 1.')
             return
+        if sigma < 0:
+            QMessageBox.critical(self, 'Error', 'La desviación del ruido σ no puede ser negativa.')
+            return
+        if not 0 <= semilla < 2 ** 32:
+            QMessageBox.critical(self, 'Error', 'La semilla debe ser un entero entre 0 y 4294967295.')
+            return
+        if gamma <= 0:
+            QMessageBox.critical(self, 'Error', 'Gamma γ debe ser mayor que cero.')
+            return
         
         self.fr_periodo_px = periodo
         self.fr_n_pasos = n_pasos
         self.fr_u0_px = u0
         self.fr_ambiente = ambiente
+        self.fr_sigma = sigma
+        self.fr_semilla = semilla
+        self.fr_gamma = gamma
 
         # Selector de k debe cubrir las N imagenes
         self.slider_fr_k.blockSignals(True)
@@ -681,7 +733,7 @@ class MainWindow(QMainWindow):
         self.slider_fr_k.blockSignals(False)
         self.label_fr_k.setText(f'Imagen k: {self.fr_k} de {self.fr_n_pasos}')
 
-        indice_franjas = self.combo_modo.findText('Imagen ideal de franjas')
+        indice_franjas = self.combo_modo.findText('Imagen de franjas')
         if self.combo_modo.currentIndex() != indice_franjas:
             self.combo_modo.setCurrentIndex(indice_franjas)
         else:
@@ -690,5 +742,10 @@ class MainWindow(QMainWindow):
     def _cambiar_k_franja(self, valor):
         self.fr_k = valor
         self.label_fr_k.setText(f'Imagen k: {valor} de {self.fr_n_pasos}')
+        if self.mesh is not None and self.modo_visualizacion == 'franjas':
+            self._actualizar_visualizacion()
+    
+    def _cambiar_etapa_franja(self, indice):
+        self.fr_etapa = indice
         if self.mesh is not None and self.modo_visualizacion == 'franjas':
             self._actualizar_visualizacion()
