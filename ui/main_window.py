@@ -14,6 +14,7 @@ from core.camera import (
 )
 from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
+from core.radiometry import ideal_fringe_image
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -49,6 +50,13 @@ class MainWindow(QMainWindow):
         self.obj_beta_deg = 0.0
 
         self._cache_visibilidad = None
+
+        # Parametros de las franjas
+        self.fr_periodo_px = 64.0
+        self.fr_u0_px = 1.0
+        self.fr_k = 1
+        self.fr_n_pasos = 12
+        self.fr_ambiente = 0.05
         
         self._build_ui()
 
@@ -86,7 +94,7 @@ class MainWindow(QMainWindow):
         titulo_modo.setObjectName('label_titulo')
         self.combo_modo = QComboBox()
         self.combo_modo.addItems(['Malla triangular', 'Nube de puntos', 'Proyeccion camara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)'])
+                                'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen ideal de franjas'])
         self.combo_modo.currentIndexChanged.connect(self._cambiar_modo)
 
         # Separador
@@ -226,7 +234,7 @@ class MainWindow(QMainWindow):
 
         self.combo_modo_sis = QComboBox()
         self.combo_modo_sis.addItems(['Malla triangular', 'Nube de puntos', 'Proyección cámara', 'Sistema completo', 'Mapa de visibilidad', 'Mapa de normales',
-                                    'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)'])
+                                    'Mapa de coordenadas del proyector', 'Mapa de sombras (Ω_map)', 'Imagen ideal de franjas'])
         self.combo_modo_sis.setCurrentIndex(0)
         self.combo_modo_sis.currentIndexChanged.connect(self._cambiar_modo_sis)
 
@@ -243,9 +251,58 @@ class MainWindow(QMainWindow):
         layout_sis.addWidget(grupo_objeto)
         layout_sis.addWidget(btn_aplicar)
 
+        # Pestaña 3 - Franjas
+        tab_franjas = QWidget()
+        scroll_fr = QScrollArea()
+        scroll_fr.setWidgetResizable(True)
+        panel_fr = QWidget()
+        layout_fr = QVBoxLayout(panel_fr)
+        layout_fr.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout_fr.setSpacing(8)
+        layout_fr.setContentsMargins(12, 12, 12, 12)
+        scroll_fr.setWidget(panel_fr)
+
+        layout_fr_outer = QVBoxLayout(tab_franjas)
+        layout_fr_outer.setContentsMargins(0, 0, 0, 0)
+        layout_fr_outer.addWidget(scroll_fr)
+
+        # Grupo patron de franjas
+        grupo_patron = QGroupBox('Patrón de franjas')
+        layout_patron = QVBoxLayout(grupo_patron)
+        layout_patron.setSpacing(6)
+
+        self.campo_fr_periodo = self._crear_campo(layout_patron, 'Periodo Tp (px del proyector):', '64.0')
+        self.campo_fr_pasos = self._crear_campo(layout_patron, 'Número de pasos N:', '12')
+        self.campo_fr_u0 = self._crear_campo(layout_patron, 'Origen de fase u0p (px):', '1.0')
+        self.campo_fr_ambiente = self._crear_campo(layout_patron, 'Intensidad ambiente I_amb:', '0.05')
+
+        # Grupo imagen mostrada
+        grupo_imagen = QGroupBox('Imagen mostrada')
+        layout_imagen = QVBoxLayout(grupo_imagen)
+        layout_imagen.setSpacing(6)
+
+        self.label_fr_k = QLabel('Imagen k: 1 de 12')
+        self.label_fr_k.setObjectName('label_valor')
+        self.slider_fr_k = QSlider(Qt.Orientation.Horizontal)
+        self.slider_fr_k.setMinimum(1)
+        self.slider_fr_k.setMaximum(12)
+        self.slider_fr_k.setValue(1)
+        self.slider_fr_k.valueChanged.connect(self._cambiar_k_franja)
+        layout_imagen.addWidget(self.label_fr_k)
+        layout_imagen.addWidget(self.slider_fr_k)
+
+        btn_aplicar_fr = QPushButton('Aplicar y mostrar franjas')
+        btn_aplicar_fr.setFixedHeight(40)
+        btn_aplicar_fr.clicked.connect(self._aplicar_franjas)
+
+        layout_fr.addWidget(grupo_patron)
+        layout_fr.addWidget(grupo_imagen)
+        layout_fr.addWidget(btn_aplicar_fr)
+
         # Agregar pestañas
         self.tabs.addTab(tab_vis, 'Visualización')
         self.tabs.addTab(tab_sistema, 'Sistema')
+        self.tabs.addTab(tab_franjas, 'Franjas')
 
         # Panel derecho - Visualizacion 3D
         self.plotter = QtInteractor(self)
@@ -333,10 +390,10 @@ class MainWindow(QMainWindow):
     
     def _cambiar_modo(self):
         indice = self.combo_modo.currentIndex()
-        modos = ['malla', 'nube', 'proyeccion', 'sistema', 'visibilidad', 'normales', 'proyector', 'sombras']
+        modos = ['malla', 'nube', 'proyeccion', 'sistema', 'visibilidad', 'normales', 'proyector', 'sombras', 'franjas']
         self.modo_visualizacion = modos[indice]
 
-        if indice >= 2:
+        if indice >= 2 and self.tabs.currentIndex() == 0:
             self.tabs.setCurrentIndex(1)
         
         self.combo_modo_sis.blockSignals(True)
@@ -366,7 +423,7 @@ class MainWindow(QMainWindow):
         )
     
     def _actualizar_visualizacion(self):
-        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras'):
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras', 'franjas'):
             self.stack.setCurrentIndex(1)
         else:
             self.stack.setCurrentIndex(0)
@@ -374,7 +431,7 @@ class MainWindow(QMainWindow):
         if self.mesh is None:
             return
         
-        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras'):
+        if self.modo_visualizacion in ('visibilidad', 'normales', 'proyector', 'sombras', 'franjas'):
             self._visualizar_visibilidad()
             return
 
@@ -557,26 +614,81 @@ class MainWindow(QMainWindow):
             return
         
         if self.modo_visualizacion == 'sombras':
-            clave_proy = (self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height, self.proj_distance_mm, self.proj_angle_deg)
-            if cache.get('clave_proy') != clave_proy:
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                try:
-                    K_p, _, _, _ = build_intrinsic_matrix(self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height)
-                    _, R_po, t_po = build_projector_extrinsic(self.proj_distance_mm, self.proj_angle_deg)
-                    etiquetas, _ = compute_projector_visibility(cache['vertices_cam'], cache['faces'], cache['P'], cache['N'], omega, R_po, t_po, K_p, self.sis_distance_mm,
-                                                                self.proj_width, self.proj_height)
-                finally:
-                    QApplication.restoreOverrideCursor()
-                cache['clave_proy'] = clave_proy
-                cache['etiquetas'] = etiquetas
-            
-            etiquetas = cache['etiquetas']
+            etiquetas, _ = self._asegurar_visibilidad_proyector(cache, omega)
             n_map = int((etiquetas == ETQ_ILUMINADO).sum())
             self.visor_2d.show_categories(etiquetas, ['Fuera de Ω_cam', 'Iluminado (Ω_map)', 'Fuera del campo del proyector', 'Sombra propia', 'Sombra proyectada'],
                                         ['#E2E8F0', '#F4D35E', '#9AA5B1', '#3B4A6B', '#1B1F3B'], title=f'Ω_map: {n_map:,} de {omega.sum():,} píxeles de Ω_cam iluminados')
+            return
+        
+        if self.modo_visualizacion == 'franjas':
+            etiquetas, info = self._asegurar_visibilidad_proyector(cache, omega)
+            omega_map = etiquetas == ETQ_ILUMINADO
+            imagen, _, _ = ideal_fringe_image(info['u_p'], info['n_dot_l'], omega, omega_map, period_px=self.fr_periodo_px, u0_px=self.fr_u0_px, k=self.fr_k, n_steps=self.fr_n_pasos,
+                                            ambient=self.fr_ambiente)
+            self.visor_2d.show_intensity(imagen, title=f'Imagen ideal I_k (k = {self.fr_k} de {self.fr_n_pasos} · T_p = {self.fr_periodo_px:g} px)')
             return
 
         if self.modo_visualizacion == 'normales':
             self.visor_2d.show_normals(cache['N'], omega, title=f'Normales (RGB = (n+1)/2 · {omega.sum():,} píxeles)')
         else:
             self.visor_2d.show_depth(cache['depth'], omega, title=f'Ω_cam: {omega.sum():,} píxeles ({porcentaje:.1f} %)')
+    
+    def _asegurar_visibilidad_proyector(self, cache, omega):
+        clave_proy = (self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height, self.proj_distance_mm, self.proj_angle_deg)
+        if cache.get('clave_proy') != clave_proy:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                K_p, _, _, _ = build_intrinsic_matrix(self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height)
+                _, R_po, t_po = build_projector_extrinsic(self.proj_distance_mm, self.proj_angle_deg)
+                etiquetas, info = compute_projector_visibility(cache['vertices_cam'], cache['faces'], cache['P'], cache['N'], omega, R_po, t_po, K_p, self.sis_distance_mm,
+                                                            self.proj_width, self.proj_height)
+            finally:
+                QApplication.restoreOverrideCursor()
+            cache['clave_proy'] = clave_proy
+            cache['etiquetas'] = etiquetas
+            cache['info_proy'] = info
+        return cache['etiquetas'], cache['info_proy']
+    
+    def _aplicar_franjas(self):
+        try:
+            periodo = float(self.campo_fr_periodo.text())
+            n_pasos = int(float(self.campo_fr_pasos.text()))
+            u0 = float(self.campo_fr_u0.text())
+            ambiente = float(self.campo_fr_ambiente.text())
+        except ValueError:
+            QMessageBox.critical(self, 'Error', 'Por favor verifica que todos los campos tengan valores numéricos válidos.')
+            return
+
+        if periodo <= 0:
+            QMessageBox.critical(self, 'Error', 'El periodo Tp debe de ser mayor que cero.')
+            return
+        if n_pasos < 1:
+            QMessageBox.critical(self, 'Error', 'El número de pasos N debe ser al menos 1.')
+            return
+        if not 0.0 <= ambiente <= 1.0:
+            QMessageBox.critical(self, 'Error', 'La intensidad ambiente debe estar entre 0 y 1.')
+            return
+        
+        self.fr_periodo_px = periodo
+        self.fr_n_pasos = n_pasos
+        self.fr_u0_px = u0
+        self.fr_ambiente = ambiente
+
+        # Selector de k debe cubrir las N imagenes
+        self.slider_fr_k.blockSignals(True)
+        self.slider_fr_k.setMaximum(n_pasos)
+        self.fr_k = self.slider_fr_k.value()
+        self.slider_fr_k.blockSignals(False)
+        self.label_fr_k.setText(f'Imagen k: {self.fr_k} de {self.fr_n_pasos}')
+
+        indice_franjas = self.combo_modo.findText('Imagen ideal de franjas')
+        if self.combo_modo.currentIndex() != indice_franjas:
+            self.combo_modo.setCurrentIndex(indice_franjas)
+        else:
+            self._actualizar_visualizacion()
+        
+    def _cambiar_k_franja(self, valor):
+        self.fr_k = valor
+        self.label_fr_k.setText(f'Imagen k: {valor} de {self.fr_n_pasos}')
+        if self.mesh is not None and self.modo_visualizacion == 'franjas':
+            self._actualizar_visualizacion()
