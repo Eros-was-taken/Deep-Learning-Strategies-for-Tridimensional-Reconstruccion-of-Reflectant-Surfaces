@@ -136,5 +136,5 @@ def compute_projector_visibility(vertices_cam, faces, P_cam, N_cam, omega_cam, R
     etiquetas[omega_cam & ~mira_al_proyector] = ETQ_SOMBRA_PROPIA
     etiquetas[omega_cam & mira_al_proyector & ~sin_oclusion] = ETQ_SOMBRA_PROYECTADA
 
-    info = {'u_p': u_p, 'v_p': v_p, 'z_p': z_p, 'depth_proj': depth_p, 'n_dot_l': n_dot_l}
+    info = {'u_p': u_p, 'v_p': v_p, 'z_p': z_p, 'depth_proj': depth_p, 'n_dot_l': n_dot_l, 'C_proy': C_proy}
     return etiquetas, info

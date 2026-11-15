@@ -14,7 +14,7 @@ from core.camera import (
 )
 from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
-from core.radiometry import ideal_fringe_image, apply_noise_and_gamma
+from core.radiometry import (ideal_fringe_image, NIVELES_ESPECULARES, specular_map, expand_specular, degrade_fringe_image, saturated_pixels)
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -71,6 +71,11 @@ class MainWindow(QMainWindow):
         self.fr_semilla = 2026
         self.fr_gamma = 2.6
         self.fr_etapa = 0
+
+        self.fr_kappa = 60.0
+        self.fr_g = 1.10
+        self.fr_o = 0.30
+        self.fr_sigma_esp = 9.0
         
         self._build_ui()
 
@@ -288,7 +293,7 @@ class MainWindow(QMainWindow):
         label_etapa = QLabel('Etapa')
         label_etapa.setObjectName('label_valor')
         self.combo_fr_etapa = QComboBox()
-        self.combo_fr_etapa.addItems(['Ideal', 'Con ruido', 'Con ruido y gamma'])
+        self.combo_fr_etapa.addItems(['Ideal', 'Con ruido', 'Con ruido y gamma', 'Con especular (sin recortar)', 'Final (recortada)', 'Máscara de saturación'])
         self.combo_fr_etapa.currentIndexChanged.connect(self._cambiar_etapa_franja)
 
         self.label_fr_k = QLabel('Imagen k: 1 de 12')
@@ -323,6 +328,25 @@ class MainWindow(QMainWindow):
         self.campo_fr_semilla = self._crear_campo(layout_degr, 'Ruido: semilla:', '2026')
         self.campo_fr_gamma = self._crear_campo(layout_degr, 'Gamma γ:', '2.6')
 
+        # Grupo reflexion especular
+        grupo_esp = QGroupBox('Reflexión especular')
+        layout_esp = QVBoxLayout(grupo_esp)
+        layout_esp.setSpacing(6)
+
+        label_nivel = QLabel('Nivel preestablecido:')
+        label_nivel.setObjectName('label_valor')
+        self.combo_fr_nivel = QComboBox()
+        self.combo_fr_nivel.addItems(list(NIVELES_ESPECULARES.keys()))
+        self.combo_fr_nivel.setCurrentIndex(2)
+        layout_esp.addWidget(label_nivel)
+        layout_esp.addWidget(self.combo_fr_nivel)
+
+        self.campo_fr_kappa = self._crear_campo(layout_esp, 'Exponente especular κs:', '60')
+        self.campo_fr_g = self._crear_campo(layout_esp, 'Amplificación g:', '1.10')
+        self.campo_fr_o =  self._crear_campo(layout_esp, 'Contribución aditiva o:', '0.30')
+        self.campo_fr_sigma_esp =  self._crear_campo(layout_esp, 'Extensión del destello σℓ (px):', '9.0')
+        self.combo_fr_nivel.currentIndexChanged.connect(self._cargar_nivel_especular)
+
         btn_aplicar_fr = QPushButton('Aplicar y mostrar franjas')
         btn_aplicar_fr.setFixedHeight(40)
         btn_aplicar_fr.clicked.connect(self._aplicar_franjas)
@@ -330,6 +354,7 @@ class MainWindow(QMainWindow):
         layout_fr.addWidget(grupo_imagen)
         layout_fr.addWidget(grupo_patron)
         layout_fr.addWidget(grupo_degr)
+        layout_fr.addWidget(grupo_esp)
         layout_fr.addWidget(btn_aplicar_fr)
 
         # Agregar pestañas
@@ -654,15 +679,7 @@ class MainWindow(QMainWindow):
             return
         
         if self.modo_visualizacion == 'franjas':
-            etiquetas, info = self._asegurar_visibilidad_proyector(cache, omega)
-            omega_map = etiquetas == ETQ_ILUMINADO
-            imagen, _, _ = ideal_fringe_image(info['u_p'], info['n_dot_l'], omega, omega_map, period_px=self.fr_periodo_px, u0_px=self.fr_u0_px, k=self.fr_k, n_steps=self.fr_n_pasos,
-                                            ambient=self.fr_ambiente)
-            nombres_etapa = ['ideal', 'con ruido', 'con ruido y gamma']
-            if self.fr_etapa > 0:
-                I_ruido, I_gamma = apply_noise_and_gamma(imagen, omega_map, sigma=self.fr_sigma, gamma=self.fr_gamma, seed=self.fr_semilla, k=self.fr_k)
-                imagen = I_ruido if self.fr_etapa == 1 else I_gamma
-            self.visor_2d.show_intensity(imagen, title=f'Imagen {nombres_etapa[self.fr_etapa]} I_k (k = {self.fr_k} de {self.fr_n_pasos} · T_p = {self.fr_periodo_px:g} px)')
+            self._visualizar_franjas(cache, omega)
             return
 
         if self.modo_visualizacion == 'normales':
@@ -695,6 +712,10 @@ class MainWindow(QMainWindow):
             sigma = float(self.campo_fr_sigma.text())
             semilla = int(float(self.campo_fr_semilla.text()))
             gamma = float(self.campo_fr_gamma.text())
+            kappa = float(self.campo_fr_kappa.text())
+            g = float(self.campo_fr_g.text())
+            o = float(self.campo_fr_o.text())
+            sigma_esp = float(self.campo_fr_sigma_esp.text())
         except ValueError:
             QMessageBox.critical(self, 'Error', 'Por favor verifica que todos los campos tengan valores numéricos válidos.')
             return
@@ -717,6 +738,15 @@ class MainWindow(QMainWindow):
         if gamma <= 0:
             QMessageBox.critical(self, 'Error', 'Gamma γ debe ser mayor que cero.')
             return
+        if kappa <= 0:
+            QMessageBox.critical(self, 'Error', 'El exponente especular κs debe ser mayor que cero.')
+            return
+        if g < 0 or o < 0:
+            QMessageBox.critical(self, 'Error', 'g y o no pueden ser negativos.')
+            return
+        if sigma_esp < 0:
+            QMessageBox.critical(self, 'Error', 'La extensión del destello σℓ no puede ser negativa.')
+            return
         
         self.fr_periodo_px = periodo
         self.fr_n_pasos = n_pasos
@@ -725,6 +755,10 @@ class MainWindow(QMainWindow):
         self.fr_sigma = sigma
         self.fr_semilla = semilla
         self.fr_gamma = gamma
+        self.fr_kappa = kappa
+        self.fr_g = g
+        self.fr_o = o
+        self.fr_sigma_esp = sigma_esp
 
         # Selector de k debe cubrir las N imagenes
         self.slider_fr_k.blockSignals(True)
@@ -749,3 +783,63 @@ class MainWindow(QMainWindow):
         self.fr_etapa = indice
         if self.mesh is not None and self.modo_visualizacion == 'franjas':
             self._actualizar_visualizacion()
+
+    def _obtener_especular(self, cache, info, omega_map):
+        clave = (cache['clave_proy'], self.fr_kappa, self.fr_sigma_esp)
+        if cache.get('clave_proy') != clave:
+            S = specular_map(cache['P'], cache['N'], info['C_proy'], omega_map, self.fr_kappa)
+            cache['S_exp'] = expand_specular(S, omega_map, self.fr_sigma_esp)
+            cache['clave_espec'] = clave
+        return cache['S_exp']
+
+    def _etapas_franja(self, cache, info, omega, omega_map, k):
+        S_exp = self._obtener_especular(cache, info, omega_map)
+        ideal, _, _ = ideal_fringe_image(info['u_p'], info['n_dot_l'], omega, omega_map, period_px=self.fr_periodo_px, u0_px=self.fr_u0_px, k=self.fr_k, n_steps=self.fr_n_pasos,
+                                        ambient=self.fr_ambiente)
+        return degrade_fringe_image(ideal, omega_map, S_exp, sigma=self.fr_sigma, gamma=self.fr_gamma, seed=self.fr_semilla, k=k, g=self.fr_g, o=self.fr_o)
+
+    def _visualizar_franjas(self, cache, omega):
+        etiquetas, info = self._asegurar_visibilidad_proyector(cache, omega)
+        omega_map = etiquetas == ETQ_ILUMINADO
+
+        if self.fr_etapa == 5:
+            self._mostrar_saturacion(cache, info, omega, omega_map)
+            return
+
+        etapas = self._etapas_franja(cache, info, omega, omega_map, self.fr_k)
+        claves = ['ideal', 'ruido', 'gamma', 'pre', 'final']
+        nombres = ['ideal', 'con ruido', 'con ruido y gamma', 'con especular (sin recortar)', 'final (recortada)']
+        imagen = etapas[claves[self.fr_etapa]]
+        vmax = max(1.0, float(imagen.max()))
+
+        titulo = (f'Imagen {nombres[self.fr_etapa]} I_k (k = {self.fr_k} de {self.fr_n_pasos}) · T_p = {self.fr_periodo_px:g} px')
+        if vmax > 1.0:
+            titulo += f' · máximo = {vmax:.2f}'
+        self.visor_2d.show_intensity(imagen, title=titulo, vmax=vmax)
+
+    def _mostrar_saturacion(self, cache, info, omega, omega_map):
+        clave = (cache['clave_proy'], self.fr_periodo_px, self.fr_u0_px, self.fr_n_pasos, self.fr_ambiente, self.fr_sigma, self.fr_semilla, self.fr_gamma, self.fr_kappa, self.fr_g, self.fr_o,
+                self.fr_sigma_esp)
+        if cache.get('clave_sat') != clave:
+            saturados = np.zeros(omega.shape, dtype=bool)
+            for k in range(1, self.fr_n_pasos + 1):
+                etapas = self._etapas_franja(cache, info, omega, omega_map, k)
+                saturados |= saturated_pixels(etapas['pre'], omega_map)
+            cache['mascara_sat'] = saturados
+            cache['clave_sat'] = clave
+
+        saturados = cache['mascara_sat']
+        categorias = np.zeros(omega.shape, dtype=np.uint8)
+        categorias[omega_map] = 1
+        categorias[saturados] = 2
+        n_sat = int(saturados.sum())
+        n_map = max(int(omega_map.sum()), 1)
+        self.visor_2d.show_categories(categorias, ['Fuera de Ω_map', 'Sin saturar', 'Saturado'], ['#E2E8F0', '#94A3B8', '#DC2626'],
+                                    title=f'Máscara de saturación (unión de las {self.fr_n_pasos} imágenes): {n_sat:,} px ({100.0 * n_sat / n_map:.2f} % de Ω_map)')
+        
+    def _cargar_nivel_especular(self, indice):
+        nombre = self.combo_fr_nivel.itemText(indice)
+        nivel = NIVELES_ESPECULARES[nombre]
+        self.campo_fr_g.setText(f"{nivel['g']:.2f}")
+        self.campo_fr_o.setText(f"{nivel['o']:.2f}")
+        self.campo_fr_sigma_esp.setText(f"{nivel['sigma']:g}")

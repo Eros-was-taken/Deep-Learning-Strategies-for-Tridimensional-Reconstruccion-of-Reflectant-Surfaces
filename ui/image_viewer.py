@@ -102,13 +102,13 @@ class ImageViewer(QWidget):
         self.figure.tight_layout()
         self.canvas.draw_idle()
     
-    def show_intensity(self, image, title='', cbar_label='Intensidad normalizada'):
+    def show_intensity(self, image, title='', cbar_label='Intensidad normalizada', vmax=1.0):
         alto, ancho = image.shape
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
 
-        im = ax.imshow(image, cmap='gray', vmin=0.0, vmax=1.0, interpolation='nearest', extent=(0.5, ancho + 0.5, alto + 0.5, 0.5))
+        im = ax.imshow(image, cmap='gray', vmin=0.0, vmax=vmax, interpolation='nearest', extent=(0.5, ancho + 0.5, alto + 0.5, 0.5))
 
         ax.set_xlabel('Columna u (px)')
         ax.set_ylabel('Fila v (px)')
