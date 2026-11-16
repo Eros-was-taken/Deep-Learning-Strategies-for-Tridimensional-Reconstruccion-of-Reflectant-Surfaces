@@ -119,3 +119,38 @@ class ImageViewer(QWidget):
 
         self.figure.tight_layout()
         self.canvas.draw_idle()
+
+    def show_phase(self, fase, mask, title='', envuelta=False):
+        alto, ancho = mask.shape
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+
+        if not mask.any():
+            ax.text(0.5, 0.5, 'Sin píxeles visibles\ncon la configuración actual', ha='center', va='center', fontsize=13, transform=ax.transAxes)
+            ax.set_axis_off()
+            self.canvas.draw_idle()
+            return
+
+        imagen = np.ma.masked_where(~mask, fase)
+
+        if envuelta:
+            cmap = matplotlib.colormaps['twilight'].copy()
+            vmin, vmax = -np.pi, np.pi
+        else:
+            cmap = matplotlib.colormaps['viridis'].copy()
+            vmin, vmax = None, None
+        cmap.set_bad('#E2E8F0')
+
+        im = ax.imshow(imagen, cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest', extent=(0.5, ancho + 0.5, alto + 0.5, 0.5))
+
+        ax.set_xlabel('Columna u (px)')
+        ax.set_ylabel('Fila v (px)')
+        ax.set_title(title, fontsize=11)
+
+        cbar = self.figure.colorbar(im, ax=ax, fraction=0.046, pad = 0.04)
+        cbar.set_label('Fase (rad)')
+        if envuelta:
+            cbar.set_ticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi], labels=['−π', '−π/2', '0', 'π/2', 'π'])
+
+        self.figure.tight_layout()
+        self.canvas.draw_idle()

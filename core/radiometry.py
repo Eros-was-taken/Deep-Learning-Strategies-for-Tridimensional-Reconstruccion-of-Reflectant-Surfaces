@@ -12,7 +12,7 @@ def fringe_pattern(u_p, period_px, u0_px, k, n_steps):
     delta_k = 2.0 * np.pi * (k - 1) / n_steps
     return 0.5 + 0.5 * np.cos(2.0 * np.pi * (u_p -u0_px) / period_px + delta_k)
 
-def ideal_fringe_image(u_p, n_dot_l, omega_cam, omega_map, period_px=64.0, u0_px=1.0, k=1, n_steps=12, ambient=0.05):
+def ideal_fringe_image(u_p, n_dot_l, omega_cam, omega_map, period_px=64.0, u0_px=512.5, k=1, n_steps=12, ambient=0.05):
     R = lambertian_response(n_dot_l, omega_map)
     I_geom = fringe_pattern(u_p, period_px, u0_px, k, n_steps)
 

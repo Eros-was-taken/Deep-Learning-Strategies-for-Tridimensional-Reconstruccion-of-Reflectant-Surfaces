@@ -15,6 +15,7 @@ from core.camera import (
 from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
 from core.radiometry import (ideal_fringe_image, NIVELES_ESPECULARES, specular_map, expand_specular, degrade_fringe_image, saturated_pixels)
+from core.phase import geometric_phase, psa_phase, phase_coverage
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -62,7 +63,7 @@ class MainWindow(QMainWindow):
 
         # Parametros de las franjas
         self.fr_periodo_px = 64.0
-        self.fr_u0_px = 1.0
+        self.fr_u0_px = 512.5
         self.fr_k = 1
         self.fr_n_pasos = 12
         self.fr_ambiente = 0.05
@@ -293,7 +294,8 @@ class MainWindow(QMainWindow):
         label_etapa = QLabel('Etapa')
         label_etapa.setObjectName('label_valor')
         self.combo_fr_etapa = QComboBox()
-        self.combo_fr_etapa.addItems(['Ideal', 'Con ruido', 'Con ruido y gamma', 'Con especular (sin recortar)', 'Final (recortada)', 'Máscara de saturación'])
+        self.combo_fr_etapa.addItems(['Ideal', 'Con ruido', 'Con ruido y gamma', 'Con especular (sin recortar)', 'Final (recortada)', 'Máscara de saturación', 'Fase continua Φ_geom',
+                                    'Fase envuelta φ_ideal (PSA)'])
         self.combo_fr_etapa.currentIndexChanged.connect(self._cambiar_etapa_franja)
 
         self.label_fr_k = QLabel('Imagen k: 1 de 12')
@@ -316,7 +318,7 @@ class MainWindow(QMainWindow):
 
         self.campo_fr_periodo = self._crear_campo(layout_patron, 'Periodo Tp (px del proyector):', '64.0')
         self.campo_fr_pasos = self._crear_campo(layout_patron, 'Número de pasos N:', '12')
-        self.campo_fr_u0 = self._crear_campo(layout_patron, 'Origen de fase u0p (px):', '1.0')
+        self.campo_fr_u0 = self._crear_campo(layout_patron, 'Origen de fase u0p (px):', '512.5')
         self.campo_fr_ambiente = self._crear_campo(layout_patron, 'Intensidad ambiente I_amb:', '0.05')
 
         # Grupo degradaciones
@@ -806,6 +808,10 @@ class MainWindow(QMainWindow):
             self._mostrar_saturacion(cache, info, omega, omega_map)
             return
 
+        if self.fr_etapa in (6, 7):
+            self._mostrar_fase(info, omega, omega_map, envuelta=(self.fr_etapa == 7))
+            return
+
         etapas = self._etapas_franja(cache, info, omega, omega_map, self.fr_k)
         claves = ['ideal', 'ruido', 'gamma', 'pre', 'final']
         nombres = ['ideal', 'con ruido', 'con ruido y gamma', 'con especular (sin recortar)', 'final (recortada)']
@@ -836,6 +842,19 @@ class MainWindow(QMainWindow):
         n_map = max(int(omega_map.sum()), 1)
         self.visor_2d.show_categories(categorias, ['Fuera de Ω_map', 'Sin saturar', 'Saturado'], ['#E2E8F0', '#94A3B8', '#DC2626'],
                                     title=f'Máscara de saturación (unión de las {self.fr_n_pasos} imágenes): {n_sat:,} px ({100.0 * n_sat / n_map:.2f} % de Ω_map)')
+
+    def _mostrar_fase(self, info, omega, omega_map, envuelta):
+        fase_geom = geometric_phase(info['u_p'], omega_map, self.fr_periodo_px, self.fr_u0_px)
+        r_ideal = phase_coverage(fase_geom, omega_map)
+
+        if not envuelta:
+            self.visor_2d.show_phase(fase_geom, omega_map, title=f'Fase continua Φ_geom · T_p = {self.fr_periodo_px:g} px · r_ideal = {r_ideal:.3f}')
+            return
+        
+        imagenes = [ideal_fringe_image(info['u_p'], info['n_dot_l'], omega, omega_map, period_px=self.fr_periodo_px, u0_px=self.fr_u0_px, k=k, n_steps=self.fr_n_pasos,
+                    ambient=self.fr_ambiente)[0] for k in range(1, self.fr_n_pasos + 1)]
+        fase = psa_phase(imagenes, omega_map)
+        self.visor_2d.show_phase(fase, omega_map, envuelta=True, title=f'Fase envuelta φ_ideal (PSA de {self.fr_n_pasos} pasos) · r_ideal = {r_ideal:.3f}')
         
     def _cargar_nivel_especular(self, indice):
         nombre = self.combo_fr_nivel.itemText(indice)
