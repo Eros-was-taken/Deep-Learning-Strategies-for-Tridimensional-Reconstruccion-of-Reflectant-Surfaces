@@ -14,7 +14,7 @@ class ConfigCamara:
 @ dataclass
 class ConfigProyector:
     focal_mm: float = 12.0
-    pixel_um: float = 4.65
+    pixel_um: float = 4.50
     ancho: int = 1024
     alto: int = 768
     distancia_mm: float = 1000.0
@@ -40,7 +40,7 @@ class ConfigDegradacion:
     kappa: float = 60.0
     g: float = 1.10
     o: float = 0.30
-    sigma_esp_px: float = 3.0
+    sigma_esp_px: float = 9.0
 
 @dataclass
 class ConfigEscena:

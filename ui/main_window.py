@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
-    QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication
+    QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication, QFileDialog
 )
 from PySide6.QtCore import Qt, QLocale
 from PySide6.QtGui import QDoubleValidator
@@ -16,6 +16,7 @@ from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
 from core.radiometry import (ideal_fringe_image, NIVELES_ESPECULARES, specular_map, expand_specular, degrade_fringe_image, saturated_pixels)
 from core.phase import geometric_phase, psa_phase, phase_coverage
+from core.config import ConfigEscena
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -29,6 +30,32 @@ class ValidadorNumerico(QDoubleValidator):
         return super().validate(texto.replace(',', '.'), pos)
 
 class MainWindow(QMainWindow):
+    _MAPA_CAMPOS = (
+        ('campo_cam_focal', 'camara', 'focal_mm'),
+        ('campo_cam_pixel', 'camara', 'pixel_um'),
+        ('campo_cam_width', 'camara', 'ancho'),
+        ('campo_cam_height', 'camara', 'alto'),
+        ('campo_cam_distance', 'camara', 'distancia_mm'),
+        ('campo_proj_focal', 'proyector', 'focal_mm'),
+        ('campo_proj_pixel', 'proyector', 'pixel_um'),
+        ('campo_proj_width', 'proyector', 'ancho'),
+        ('campo_proj_height', 'proyector', 'alto'),
+        ('campo_proj_angle', 'proyector', 'angulo_deg'),
+        ('campo_obj_alpha', 'objeto', 'alpha_deg'),
+        ('campo_obj_beta', 'objeto', 'beta_deg'),
+        ('campo_fr_periodo', 'franjas', 'periodo_px'),
+        ('campo_fr_pasos', 'franjas', 'n_pasos'),
+        ('campo_fr_u0', 'franjas', 'u0_px'),
+        ('campo_fr_ambiente', 'franjas', 'ambiente'),
+        ('campo_fr_sigma', 'degradacion', 'sigma'),
+        ('campo_fr_semilla', 'degradacion', 'semilla'),
+        ('campo_fr_gamma', 'degradacion', 'gamma'),
+        ('campo_fr_kappa', 'degradacion', 'kappa'),
+        ('campo_fr_g', 'degradacion', 'g'),
+        ('campo_fr_o', 'degradacion', 'o'),
+        ('campo_fr_sigma_esp', 'degradacion', 'sigma_esp_px'),
+    )
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('Simulador de Franjas')
@@ -81,6 +108,12 @@ class MainWindow(QMainWindow):
         self._build_ui()
 
     def _build_ui(self):
+        menu_archivo = self.menuBar().addMenu('Archivo')
+        accion_guardar = menu_archivo.addAction('Guardar configuración...')
+        accion_guardar.triggered.connect(self._guardar_configuracion)
+        accion_cargar = menu_archivo.addAction('Cargar configuración...')
+        accion_cargar.triggered.connect(self._cargar_configuracion)
+
         widget_central = QWidget()
         self.setCentralWidget(widget_central)
 
@@ -725,8 +758,8 @@ class MainWindow(QMainWindow):
         if periodo <= 0:
             QMessageBox.critical(self, 'Error', 'El periodo Tp debe de ser mayor que cero.')
             return
-        if n_pasos < 1:
-            QMessageBox.critical(self, 'Error', 'El número de pasos N debe ser al menos 1.')
+        if n_pasos < 3:
+            QMessageBox.critical(self, 'Error', 'El número de pasos N debe ser al menos 3.')
             return
         if not 0.0 <= ambiente <= 1.0:
             QMessageBox.critical(self, 'Error', 'La intensidad ambiente debe estar entre 0 y 1.')
@@ -862,3 +895,58 @@ class MainWindow(QMainWindow):
         self.campo_fr_g.setText(f"{nivel['g']:.2f}")
         self.campo_fr_o.setText(f"{nivel['o']:.2f}")
         self.campo_fr_sigma_esp.setText(f"{nivel['sigma']:g}")
+    
+    @staticmethod
+    def _texto_numero(valor):
+        if isinstance(valor, int):
+            return str(valor)
+        return ('%.10f' % valor).rstrip('0').rstrip('.') or '0'
+    
+    def _leer_configuracion(self):
+        cfg = ConfigEscena()
+        for nombre, seccion, atributo in self._MAPA_CAMPOS:
+            destino = getattr(cfg, seccion)
+            tipo = type(getattr(destino, atributo))
+            valor = tipo(float(getattr(self, nombre).text()))
+            setattr(destino, atributo, valor)
+        return cfg
+    
+    def _escribir_configuracion(self, cfg):
+        for nombre, seccion, atributo in self._MAPA_CAMPOS:
+            valor = getattr(getattr(cfg, seccion), atributo)
+            getattr(self, nombre).setText(self._texto_numero(valor))
+
+    def _guardar_configuracion(self):
+        try:
+            cfg = self._leer_configuracion()
+        except ValueError:
+            QMessageBox.critical(self, 'Error', 'Por favor verifica que todos los campos tengan valores numéricos válidos.')
+            return
+        errores = cfg.validar()
+        if errores:
+            QMessageBox.critical(self, 'Configuración no válida', '\n'.join(errores))
+            return
+        ruta, _ = QFileDialog.getSaveFileName(self, 'Guardar configuración', 'configuracion.json', 'Configuración (*.json)')
+        if not ruta:
+            return
+        try:
+            cfg.guardar_json(ruta)
+        except OSError as error:
+            QMessageBox.critical(self, 'Error', f'No se pudo guardar el archivo:\n{error}')
+
+    def _cargar_configuracion(self):
+        ruta, _ = QFileDialog.getOpenFileName(self, 'Cargar configuración', '', 'Configuración (*.json)')
+        if not ruta:
+            return
+        try:
+            cfg = ConfigEscena.cargar_json(ruta)
+        except (OSError, ValueError, TypeError) as error:
+            QMessageBox.critical(self, 'Error', f'No se pudo leer la configuración:\n{error}')
+            return
+        errores = cfg.validar()
+        if errores:
+            QMessageBox.critical(self, 'Configuración no válida', '\n'.join(errores))
+            return
+        self._escribir_configuracion(cfg)
+        self._aplicar_configuracion()
+        self._aplicar_franjas()
