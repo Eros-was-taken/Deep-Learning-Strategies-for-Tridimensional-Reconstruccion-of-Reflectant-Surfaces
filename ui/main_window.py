@@ -16,7 +16,9 @@ from core.geometry import condition_mesh, compute_system_geometry
 from core.visibility import rasterize_zbuffer, compute_point_map_and_normals, camera_to_projector_coords, compute_projector_visibility, ETQ_ILUMINADO
 from core.radiometry import (ideal_fringe_image, NIVELES_ESPECULARES, specular_map, expand_specular, degrade_fringe_image, saturated_pixels)
 from core.phase import geometric_phase, psa_phase, phase_coverage
-from core.config import ConfigEscena
+from core.config import ConfigEscena, ConfigCamara, ConfigProyector, ConfigObjeto, ConfigFranjas, ConfigDegradacion
+from core.simulator import calcular_geometria_camara, calcular_visibilidad_proyector, simular_escena
+from core.exportacion import exportar_escena
 from ui.image_viewer import ImageViewer
 from ui.styles import STYLE
 
@@ -113,6 +115,10 @@ class MainWindow(QMainWindow):
         accion_guardar.triggered.connect(self._guardar_configuracion)
         accion_cargar = menu_archivo.addAction('Cargar configuración...')
         accion_cargar.triggered.connect(self._cargar_configuracion)
+        menu_archivo.addSeparator()
+        accion_exportar = menu_archivo.addAction('Exportar escena...')
+        accion_exportar.setShortcut('Ctrl+E')
+        accion_exportar.triggered.connect(self._exportar_escena)
 
         widget_central = QWidget()
         self.setCentralWidget(widget_central)
@@ -680,19 +686,11 @@ class MainWindow(QMainWindow):
         if cache is None or cache['clave'] != clave:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
-                K, f_px, cx, cy = build_intrinsic_matrix(self.sis_focal_mm, self.sis_pixel_um, self.sis_width, self.sis_height)
-
-                vertices = np.array(self.mesh.vertices)
-                vertices_cam, scale, Lx, Ly = condition_mesh(vertices, self.obj_alpha_deg, self.obj_beta_deg, f_px, self.sis_width, self.sis_height, self.sis_distance_mm)
-
-                faces = np.array(self.mesh.faces)
-                depth, face_id, omega_cam = rasterize_zbuffer(vertices_cam, faces, K, self.sis_width, self.sis_height)
-
-                P, N = compute_point_map_and_normals(vertices_cam, faces, face_id, depth, K)
+                geo = calcular_geometria_camara(self.mesh.vertices, self.mesh.faces, self._config_desde_atributos())
             finally:
                 QApplication.restoreOverrideCursor()
             
-            cache = {'clave': clave, 'depth': depth, 'face_id': face_id, 'omega_cam': omega_cam, 'P': P, 'N': N, 'vertices_cam': vertices_cam, 'faces': faces}
+            cache = {'clave': clave, 'depth': geo.depth, 'face_id': geo.face_id, 'omega_cam': geo.omega_cam, 'P': geo.P, 'N': geo.N, 'vertices_cam': geo.vertices_cam, 'faces': geo.faces}
             self._cache_visibilidad = cache
         
         omega = cache['omega_cam']
@@ -727,10 +725,7 @@ class MainWindow(QMainWindow):
         if cache.get('clave_proy') != clave_proy:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
-                K_p, _, _, _ = build_intrinsic_matrix(self.proj_focal_mm, self.proj_pixel_um, self.proj_width, self.proj_height)
-                _, R_po, t_po = build_projector_extrinsic(self.proj_distance_mm, self.proj_angle_deg)
-                etiquetas, info = compute_projector_visibility(cache['vertices_cam'], cache['faces'], cache['P'], cache['N'], omega, R_po, t_po, K_p, self.sis_distance_mm,
-                                                            self.proj_width, self.proj_height)
+                etiquetas, info = calcular_visibilidad_proyector(cache['vertices_cam'], cache['faces'], cache['P'], cache['N'], omega, self._config_desde_atributos())
             finally:
                 QApplication.restoreOverrideCursor()
             cache['clave_proy'] = clave_proy
@@ -950,3 +945,45 @@ class MainWindow(QMainWindow):
         self._escribir_configuracion(cfg)
         self._aplicar_configuracion()
         self._aplicar_franjas()
+
+    def _exportar_escena(self):
+        if self.mesh is None:
+            QMessageBox.information(self, 'Exportar escena', 'Primero carga una malla.')
+            return
+        config = self._config_desde_atributos()
+        errores = config.validar()
+        if errores:
+            QMessageBox.critical(self, 'Configuración no válida', '\n'.join(errores))
+            return
+        padre = QFileDialog.getExistingDirectory(self, 'Elige la carpeta donde guardar la escena')
+        if not padre:
+            return
+        
+        error = None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            resultado = simular_escena(self.mesh.vertices, self.mesh.faces, config)
+            carpeta, metadatos = exportar_escena(resultado, padre)
+        except (OSError, ValueError) as e:
+            error = e
+        finally:
+            QApplication.restoreOverrideCursor()
+        
+        if error is not None:
+            QMessageBox.critical(self, 'Error al exportar', str(error))
+            return
+        
+        mensaje = f'Escena guardada en:\n{carpeta}'
+        if metadatos['problemas']:
+            mensaje += '\n\nAvisos de verificación:\n' + '\n'.join(metadatos['problemas'])
+        QMessageBox.information(self, 'Escena exportada', mensaje)
+
+    def _config_desde_atributos(self):
+        return ConfigEscena(
+            camara=ConfigCamara(focal_mm=self.sis_focal_mm, pixel_um=self.sis_pixel_um, ancho=self.sis_width, alto=self.sis_height, distancia_mm=self.sis_distance_mm),
+            proyector=ConfigProyector(focal_mm=self.proj_focal_mm, pixel_um=self.proj_pixel_um, ancho=self.proj_width, alto=self.proj_height, distancia_mm=self.proj_distance_mm,
+                                    angulo_deg=self.proj_angle_deg),
+            objeto=ConfigObjeto(alpha_deg=self.obj_alpha_deg, beta_deg=self.obj_beta_deg),
+            franjas=ConfigFranjas(periodo_px=self.fr_periodo_px, n_pasos=self.fr_n_pasos, u0_px=self.fr_u0_px, ambiente=self.fr_ambiente),
+            degradacion=ConfigDegradacion(sigma=self.fr_sigma, semilla=self.fr_semilla, gamma=self.fr_gamma, kappa=self.fr_kappa, g=self.fr_g, o=self.fr_o, sigma_esp_px=self.fr_sigma_esp),
+        )

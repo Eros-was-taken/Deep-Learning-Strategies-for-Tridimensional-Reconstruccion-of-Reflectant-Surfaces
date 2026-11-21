@@ -38,8 +38,18 @@ def _avisar(progreso, fraccion, texto):
     if progreso is not None:
         progreso(fraccion, texto)
 
-def calcular_geometria(vertices, faces, config, progreso=None):
-    cam, pro, obj = config.camara, config.proyector, config.objeto
+@dataclass
+class GeometriaCamara:
+    vertices_cam: np.ndarray
+    faces: np.ndarray
+    depth: np.ndarray
+    face_id: np.ndarray
+    omega_cam: np.ndarray
+    P: np.ndarray
+    N: np.ndarray
+
+def calcular_geometria_camara(vertices, faces, config, progreso=None):
+    cam, obj = config.camara, config.objeto
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces)
 
@@ -47,17 +57,23 @@ def calcular_geometria(vertices, faces, config, progreso=None):
     K, f_px, _, _ = build_intrinsic_matrix(cam.focal_mm, cam.pixel_um, cam.ancho, cam.alto)
     vertices_cam, _, _, _ = condition_mesh(vertices, obj.alpha_deg, obj.beta_deg, f_px, cam.ancho, cam.alto, cam.distancia_mm)
 
-    _avisar(progreso, 0.15, 'Proyectando la cámara')
+    _avisar(progreso, 0.15, 'Proyectando a la cámara')
     depth, face_id, omega_cam = rasterize_zbuffer(vertices_cam, faces, K, cam.ancho, cam.alto)
     P, N = compute_point_map_and_normals(vertices_cam, faces, face_id, depth, K)
+    return GeometriaCamara(vertices_cam, faces, depth, face_id, omega_cam, P, N)
 
+def calcular_visibilidad_proyector(vertices_cam, faces, P, N, omega_cam, config, progreso=None):
+    cam, pro = config.camara, config.proyector
     _avisar(progreso, 0.35, 'Visibilidad del proyector y sombras')
     K_p, _, _, _ = build_intrinsic_matrix(pro.focal_mm, pro.pixel_um, pro.ancho, pro.alto)
-    _, R_po, t_po = build_projector_extrinsic(pro.distancia_mm, pro.angulo_deg)
-    etiquetas, info = compute_projector_visibility(vertices_cam, faces, P, N, omega_cam, R_po, t_po, K_p, cam.distancia_mm, pro.ancho, pro.alto)
+    _, R_po, t_po = build_projector_extrinsic(pro.distancia_mm,  pro.angulo_deg)
+    return compute_projector_visibility(vertices_cam, faces, P, N, omega_cam, R_po, t_po, K_p, cam.distancia_mm, pro.ancho, pro.alto)
 
-    return Geometria(omega_cam=omega_cam, omega_map=(etiquetas == ETQ_ILUMINADO), etiquetas=etiquetas, profundidad=depth, puntos_3d=P, normales=N,
-                    u_p=info['u_p'], v_p=info['v_p'], n_dot_l=info['n_dot_l'], centro_proyector=np.asarray(info['C_proy'], dtype=float),)
+def calcular_geometria(vertices, faces, config, progreso=None):
+    gc = calcular_geometria_camara(vertices, faces, config, progreso)
+    etiquetas, info = calcular_visibilidad_proyector(gc.vertices_cam, gc.faces, gc.P, gc.N, gc.omega_cam, config, progreso)
+    return Geometria(omega_cam=gc.omega_cam, omega_map=(etiquetas == ETQ_ILUMINADO), etiquetas=etiquetas, profundidad=gc.depth, puntos_3d=gc.P, normales=gc.N, u_p=info['u_p'],
+                    v_p=info['v_p'], n_dot_l=info['n_dot_l'], centro_proyector=np.asarray(info['C_proy'], dtype=float),)
 
 def generar_franjas(geometria, config, guardar_etapas=False, progreso=None):
     fr, dg = config.franjas, config.degradacion
