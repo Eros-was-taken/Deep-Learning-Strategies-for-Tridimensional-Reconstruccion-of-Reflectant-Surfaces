@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QFrame, QComboBox, QSlider, QCheckBox,
-    QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication, QFileDialog
+    QLineEdit, QGroupBox, QScrollArea, QTabWidget, QStackedWidget, QApplication, QFileDialog, QDialog, QProgressDialog
 )
 from PySide6.QtCore import Qt, QLocale
 from PySide6.QtGui import QDoubleValidator
@@ -19,7 +19,9 @@ from core.phase import geometric_phase, psa_phase, phase_coverage
 from core.config import ConfigEscena, ConfigCamara, ConfigProyector, ConfigObjeto, ConfigFranjas, ConfigDegradacion
 from core.simulator import calcular_geometria_camara, calcular_visibilidad_proyector, simular_escena
 from core.exportacion import exportar_escena
+from core.barrido import barrer_orientaciones, generar_orientaciones
 from ui.image_viewer import ImageViewer
+from ui.dialogo_barrido import DialogoBarrido
 from ui.styles import STYLE
 
 class ValidadorNumerico(QDoubleValidator):
@@ -119,6 +121,8 @@ class MainWindow(QMainWindow):
         accion_exportar = menu_archivo.addAction('Exportar escena...')
         accion_exportar.setShortcut('Ctrl+E')
         accion_exportar.triggered.connect(self._exportar_escena)
+        accion_barrido = menu_archivo.addAction('Barrido de orientaciones...')
+        accion_barrido.triggered.connect(self._barrido_orientaciones)
 
         widget_central = QWidget()
         self.setCentralWidget(widget_central)
@@ -977,6 +981,49 @@ class MainWindow(QMainWindow):
         if metadatos['problemas']:
             mensaje += '\n\nAvisos de verificación:\n' + '\n'.join(metadatos['problemas'])
         QMessageBox.information(self, 'Escena exportada', mensaje)
+
+    def _barrido_orientaciones(self):
+        if self.mesh is None:
+            QMessageBox.information(self, 'Barrido', 'Primero carga una malla')
+            return
+        config = self._config_desde_atributos()
+        errores = config.validar()
+        if errores:
+            QMessageBox.critical(self, 'Configuración no válida', '\n'.join(errores))
+            return
+
+        dialogo = DialogoBarrido(self)
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return
+        v = dialogo.valores()
+        orientaciones = generar_orientaciones(v['n_alpha'], v['paso_alpha'], v['n_beta'], v['paso_beta'], v['alpha0'], v['beta0'])
+
+        progreso = QProgressDialog('Preparando...', 'Cancelar', 0, len(orientaciones), self)
+        progreso.setWindowTitle('Barrido de orientaciones')
+        progreso.setWindowModality(Qt.WindowModality.WindowModal)
+        progreso.setMinimumDuration(0)
+        progreso.setValue(0)
+
+        def al_avanzar(hechas, total, texto):
+            progreso.setValue(hechas)
+            progreso.setLabelText(texto)
+            QApplication.processEvents()
+
+        resumen = barrer_orientaciones(self.mesh.vertices, self.mesh.faces, config, orientaciones, v['carpeta'], v['modelo'], reanudar=v['reanudar'],
+                                    progreso=al_avanzar, cancelar=progreso.wasCanceled)
+        progreso.close()
+
+        mensaje = (f"Exportadas: {len(resumen['exportadas'])}\n"
+                f"Omitidas (ya existían): {len(resumen['omitidas'])}\n"
+                f"Fallidas: {len(resumen['fallidas'])}")
+        if resumen['cancelado']:
+            mensaje += '\n\nEl barrido se canceló antes de terminar.'
+        for fallo in resumen['fallidas'][:5]:
+            mensaje += f"\n- {fallo['escena']}: {fallo['error']}"
+        if resumen['con_problemas']:
+            mensaje += f"\n\n{len(resumen['con_problemas'])} escenas con avisos de verificación (ver barrido.json)."
+        mensaje += f"\n\nCarpeta: {v['carpeta']}\\{v['modelo']}"
+        QMessageBox.information(self, 'Barrido terminado', mensaje)
 
     def _config_desde_atributos(self):
         return ConfigEscena(
