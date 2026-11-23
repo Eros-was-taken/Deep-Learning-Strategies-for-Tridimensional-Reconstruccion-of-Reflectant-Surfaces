@@ -26,6 +26,10 @@ class DialogoBarrido(QDialog):
         self.paso_beta = self._spin_decimal(15.0, 0.1, 360.0)
         self.beta0 = self._spin_decimal(0.0, -360.0, 360.0)
 
+        self.check_niveles = QCheckBox('Generar los cinco niveles de degradación')
+        nota_niveles = QLabel('low, medium, moderate, strong y very_strong. Si la desmarcas, se genera un solo nivel, el de la configuración actual.')
+        nota_niveles.setWordWrap(True)
+
         self.check_reanudar = QCheckBox('Omitir escenas ya exportadas (reanudar)')
         self.check_reanudar.setChecked(True)
         nota = QLabel('Si la desmarcas, las escenas que ya existan se sobrescriben.')
@@ -50,6 +54,8 @@ class DialogoBarrido(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(formulario)
+        layout.addWidget(self.check_niveles)
+        layout.addWidget(nota_niveles)
         layout.addWidget(self.check_reanudar)
         layout.addWidget(nota)
         layout.addWidget(self.label_total)
@@ -100,5 +106,6 @@ class DialogoBarrido(QDialog):
             'carpeta': self.campo_carpeta.text(),
             'n_alpha': self.n_alpha.value(), 'paso_alpha': self.paso_alpha.value(), 'alpha0': self.alpha0.value(),
             'n_beta': self.n_beta.value(), 'paso_beta': self.paso_beta.value(), 'beta0': self.beta0.value(),
+            'cinco_niveles': self.check_niveles.isChecked(),
             'reanudar': self.check_reanudar.isChecked(),
         }

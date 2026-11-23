@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -6,7 +7,7 @@ from core.camera import build_intrinsic_matrix, build_projector_extrinsic
 from core.config import ConfigEscena
 from core.geometry import condition_mesh
 from core.phase import geometric_phase, phase_coverage, psa_phase
-from core.radiometry import (degrade_fringe_image, expand_specular, ideal_fringe_image, saturated_pixels, specular_map)
+from core.radiometry import (NIVELES_ESPECULARES, degrade_fringe_image, expand_specular, ideal_fringe_image, saturated_pixels, specular_map)
 from core.visibility import (ETQ_ILUMINADO, compute_point_map_and_normals, compute_projector_visibility, rasterize_zbuffer)
 
 @dataclass
@@ -113,6 +114,35 @@ def simular_escena(vertices, faces, config, guardar_etapas=False, progreso=None)
         raise ValueError('Configuración no válida: ' + '; '.join(errores))
     geometria = calcular_geometria(vertices, faces, config, progreso)
     return generar_franjas(geometria, config, guardar_etapas, progreso)
+
+def nombre_nivel(degradacion):
+    for nombre, p in NIVELES_ESPECULARES.items():
+        if (abs(degradacion.g - p['g']) < 1e-9 and abs(degradacion.o - p['o']) < 1e-9 and abs(degradacion.sigma_esp_px - p['sigma']) < 1e-9):
+            return nombre
+    return 'personalizado'
+
+def config_con_nivel(config, nivel):
+    p = NIVELES_ESPECULARES[nivel]
+    cfg = copy.deepcopy(config)
+    cfg.degradacion.g = p['g']
+    cfg.degradacion.o = p['o']
+    cfg.degradacion.sigma_esp_px = p['sigma']
+    return cfg
+
+def iterar_niveles(vertices, faces, config, niveles=None, progreso=None):
+    errores = config.validar()
+    if errores:
+        raise ValueError('COnfiguración no válida: ' + '; '.join(errores))
+    if niveles is None:
+        pares = [(nombre_nivel(config.degradacion), config)]
+    else:
+        desconocidos = [n for n in niveles if n not in NIVELES_ESPECULARES]
+        if desconocidos:
+            raise ValueError(f'Niveles desconocidos: {desconocidos}')
+        pares = [(n, config_con_nivel(config, n)) for n in niveles]
+    geometria = calcular_geometria(vertices, faces, config, progreso)
+    for nombre, cfg in pares:
+        yield nombre, generar_franjas(geometria, cfg)
 
 def verificar_escena(resultado):
     p = []

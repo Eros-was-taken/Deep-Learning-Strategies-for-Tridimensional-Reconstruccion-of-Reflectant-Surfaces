@@ -4,21 +4,26 @@ from datetime import datetime
 from pathlib import Path
 
 from core.config import ConfigEscena
-from core.exportacion import exportar_escena, nombre_escena
-from core.simulator import simular_escena
+from core.exportacion import exportar_niveles, nombre_escena
+from core.simulator import iterar_niveles, nombre_nivel
 
 def generar_orientaciones(n_alpha=8, paso_alpha=45.0, n_beta=24, paso_beta=15.0, alpha0=0.0, beta0=0.0):
     return [(round(alpha0 + i * paso_alpha, 6), round(beta0 + j * paso_beta, 6)) for i in range(n_alpha) for j in range(n_beta)]
 
-def _misma_config(carpeta, config):
+def _misma_escena(carpeta, config, niveles):
     try:
-        return ConfigEscena.cargar_json(carpeta / 'config.json') == config
-    except (OSError, ValueError, TypeError):
+        if ConfigEscena.cargar_json(carpeta / 'config.json') != config:
+            return False
+        with open(carpeta / 'metadatos.json', 'r', encoding='utf-8') as fh:
+            return list(json.load(fh)['niveles']) == list(niveles)
+    except (OSError, ValueError, TypeError, KeyError):
         return False
 
-def barrer_orientaciones(vertices, faces, config_base, orientaciones, carpeta_salida, nombre_modelo='modelo', reanudar=True, progreso=None, cancelar=None):
+def barrer_orientaciones(vertices, faces, config_base, orientaciones, carpeta_salida, nombre_modelo='modelo', niveles=None, reanudar=True, progreso=None, cancelar=None):
     destino = Path(carpeta_salida) / nombre_modelo
     destino.mkdir(parents=True, exist_ok=True)
+    niveles = list(niveles) if niveles else None
+    esperados = niveles or [nombre_nivel(config_base.degradacion)]
     total = len(orientaciones)
     resumen = {'modelo': nombre_modelo, 'total': total, 'exportadas': [], 'omitidas': [], 'fallidas': [], 'con_problemas': [], 'cancelado': False}
     
@@ -36,7 +41,7 @@ def barrer_orientaciones(vertices, faces, config_base, orientaciones, carpeta_sa
         
         carpeta = destino / nombre
         if reanudar and (carpeta / 'metadatos.json').exists():
-            if _misma_config(carpeta, cfg):
+            if _misma_escena(carpeta, cfg, esperados):
                 resumen['omitidas'].append(nombre)
             else:
                 resumen['fallidas'].append({'escena': nombre, 'error': 'ya existe con otra configuración; usa otra carpeta o desactiva "reanudar" para sobrescribir'})
@@ -44,8 +49,7 @@ def barrer_orientaciones(vertices, faces, config_base, orientaciones, carpeta_sa
             continue
 
         try:
-            resultado = simular_escena(vertices, faces, cfg)
-            _, meta = exportar_escena(resultado, destino, sobrescribir=True)
+            _, meta = exportar_niveles(iterar_niveles(vertices, faces, cfg, niveles), destino, nombre, config_base=cfg, sobrescribir=True)
         except Exception as error:
             resumen['fallidas'].append({'escena': nombre, 'error': f'{type(error).__name__}: {error}'})
         else:

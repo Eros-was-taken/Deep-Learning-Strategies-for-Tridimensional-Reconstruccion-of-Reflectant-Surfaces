@@ -1008,8 +1008,9 @@ class MainWindow(QMainWindow):
             progreso.setValue(hechas)
             progreso.setLabelText(texto)
             QApplication.processEvents()
-
-        resumen = barrer_orientaciones(self.mesh.vertices, self.mesh.faces, config, orientaciones, v['carpeta'], v['modelo'], reanudar=v['reanudar'],
+        
+        niveles = list(NIVELES_ESPECULARES) if v['cinco_niveles'] else None
+        resumen = barrer_orientaciones(self.mesh.vertices, self.mesh.faces, config, orientaciones, v['carpeta'], v['modelo'],niveles=niveles ,reanudar=v['reanudar'],
                                     progreso=al_avanzar, cancelar=progreso.wasCanceled)
         progreso.close()
 
