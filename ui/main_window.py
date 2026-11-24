@@ -20,6 +20,7 @@ from core.config import ConfigEscena, ConfigCamara, ConfigProyector, ConfigObjet
 from core.simulator import calcular_geometria_camara, calcular_visibilidad_proyector, simular_escena
 from core.exportacion import exportar_escena
 from core.barrido import barrer_orientaciones, generar_orientaciones
+from core.view_planning import plan_views
 from ui.image_viewer import ImageViewer
 from ui.dialogo_barrido import DialogoBarrido
 from ui.styles import STYLE
@@ -996,7 +997,49 @@ class MainWindow(QMainWindow):
         if dialogo.exec() != QDialog.DialogCode.Accepted:
             return
         v = dialogo.valores()
-        orientaciones = generar_orientaciones(v['n_alpha'], v['paso_alpha'], v['n_beta'], v['paso_beta'], v['alpha0'], v['beta0'])
+        plan = None
+        if v['planificar']:
+            progreso = QProgressDialog(
+                'Preparando planificación de vistas...', 'Cancelar', 0,
+                v['num_candidatas'], self
+            )
+            progreso.setWindowTitle('Planificación de vistas')
+            progreso.setWindowModality(Qt.WindowModality.WindowModal)
+            progreso.setMinimumDuration(0)
+            progreso.setValue(0)
+
+            def al_planificar(hechas, total, texto):
+                progreso.setMaximum(total)
+                progreso.setValue(hechas)
+                progreso.setLabelText(texto)
+                QApplication.processEvents()
+
+            try:
+                plan = plan_views(
+                    self.mesh.vertices,
+                    self.mesh.faces,
+                    config,
+                    candidate_count=v['num_candidatas'],
+                    max_views=v['max_vistas'],
+                    decimation_percentage=v['porcentaje_malla'],
+                    max_incidence_deg=v['incidencia_max'],
+                    min_overlap=v['solapamiento_minimo'],
+                    progreso=al_planificar,
+                    cancelar=progreso.wasCanceled,
+                )
+            except (InterruptedError, ValueError, RuntimeError) as error:
+                progreso.close()
+                if isinstance(error, InterruptedError):
+                    return
+                QMessageBox.critical(self, 'Planificación de vistas', str(error))
+                return
+            progreso.close()
+            orientaciones = plan.orientaciones
+        else:
+            orientaciones = generar_orientaciones(
+                v['n_alpha'], v['paso_alpha'], v['n_beta'], v['paso_beta'],
+                v['alpha0'], v['beta0']
+            )
 
         progreso = QProgressDialog('Preparando...', 'Cancelar', 0, len(orientaciones), self)
         progreso.setWindowTitle('Barrido de orientaciones')
@@ -1023,6 +1066,15 @@ class MainWindow(QMainWindow):
             mensaje += f"\n- {fallo['escena']}: {fallo['error']}"
         if resumen['con_problemas']:
             mensaje += f"\n\n{len(resumen['con_problemas'])} escenas con avisos de verificación (ver barrido.json)."
+        if plan is not None:
+            mensaje += (
+                f'\n\nPlanificación: {len(plan.orientaciones)} vistas seleccionadas de '
+                f'{v["num_candidatas"]}; cobertura estimada {plan.cobertura:.1%} '
+                f'({plan.caras_cubiertas:,} de {plan.total_caras:,} caras).'
+                f'\nMalla de análisis: {plan.caras_decimadas:,} caras '
+                f'({v["porcentaje_malla"]}% solicitado); '
+                f'tiempo de planificación: {plan.tiempo_segundos:.2f} s.'
+            )
         mensaje += f"\n\nCarpeta: {v['carpeta']}\\{v['modelo']}"
         QMessageBox.information(self, 'Barrido terminado', mensaje)
 

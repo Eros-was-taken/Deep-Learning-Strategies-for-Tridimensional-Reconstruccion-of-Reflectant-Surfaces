@@ -14,7 +14,11 @@ Computational experiment on using deep learning to improve the 3D reconstruction
 ├── core/
 │   ├── mesh_loader.py # Loads .ply meshes (trimesh) and extracts the point cloud
 │   ├── camera.py      # Intrinsics/extrinsics for camera and projector, point projection
-│   └── geometry.py    # Object conditioning (rotation, centering, scaling) and system layout
+│   ├── geometry.py    # Object conditioning (rotation, centering, scaling) and system layout
+│   └── view_planning.py # Fibonacci candidates, decimation, visibility and greedy selection
+├── tests/
+│   └── test_view_planning.py
+├── benchmark_view_planning.py # Compare planning cost with exhaustive simulation
 ├── data/
 │   └── bunny.ply      # Example model (Stanford bunny)
 └── ui/
@@ -84,6 +88,26 @@ python prueba.py
 | Projector angle | 12° |
 
 The panel on the left also shows the file name, number of points and faces, and the model dimensions.
+
+### Planning a smaller set of views
+
+In **Barrido de orientaciones**, enable **Seleccionar vistas con planificación Fibonacci** to rank a set of candidate object orientations and export only the selected views. Since the current simulator keeps the camera/projector fixed, the candidate viewpoints are represented by rotating the object. The planner:
+
+- samples candidate orientations over a Fibonacci sphere;
+- decimates the mesh by a user-selected percentage of its original triangles;
+- checks camera and projector field of view, first-hit visibility, incidence angle, and specular risk at decimated face centers;
+- greedily adds views with new high-quality coverage while requiring the requested overlap with a previously selected view.
+
+The depth checks use accelerated Open3D ray casts instead of rendering full-resolution depth maps for every candidate. This is a geometric approximation: the selected views are still simulated using the original mesh and configured image resolution. Specular risk is estimated from the simulator's half-vector model; it is not a measurement of real sensor saturation.
+
+Planning has a fixed cost, so it may not save time when only a few candidates are requested. Verify it on your mesh and settings with:
+
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s tests
+.\venv\Scripts\python.exe benchmark_view_planning.py --candidates 12 --max-views 4 --resolution 256
+```
+
+The benchmark reports the measured time for exhaustive candidate simulation versus planning plus full-resolution simulation of the selected views. Compare results with the same machine and mesh; do not assume planning is faster for every workload.
 
 ## Troubleshooting
 
